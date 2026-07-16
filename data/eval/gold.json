@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "frozen_at": "2026-07-16T21:30:29Z",
+  "independence": "Hand labels were frozen from the cited official notice excerpts before model predictions.",
+  "policy": {
+    "supplier_names": "Exact recalling establishment or company name.",
+    "lot_codes": "Only identifiers explicitly described as lot codes or Lot#; USDA establishment numbers are not lot codes.",
+    "production_dates": "Only dates explicitly described as production dates or a production interval; recall, publish, purchase, best-by, and best-if-used-by dates are not production dates.",
+    "unknowns": "Absent fields are empty lists or null and are never inferred."
+  },
+  "notices": [
+    {
+      "id": "fsis-010-2024-cj-foods-dumplings",
+      "authority": "USDA",
+      "source_url": "https://www.fsis.usda.gov/recalls-alerts/cj-foods-manufacturing-beaumont-corporation-recalls-trader-joes-chicken-soup",
+      "source_title": "CJ Foods Manufacturing Beaumont Corporation Recalls Trader Joe’s Chicken Soup Dumplings Due to Possible Foreign Matter Contamination",
+      "notice_text": "WASHINGTON, March 2, 2024 – CJ Foods Manufacturing Beaumont Corporation, a Beaumont, Calif., establishment, is recalling approximately 61,839 pounds of steamed chicken soup dumpling products that may be contaminated with foreign materials, specifically hard plastic from a permanent marker pen, the U.S. Department of Agriculture’s Food Safety and Inspection Service (FSIS) announced today.\n\nThe steamed chicken soup dumplings were produced on Dec. 7, 2023. The following products are subject to recall [view labels]:\n\n6-oz. boxes with plastic trays containing six pieces of “TRADER JOE’S Steamed Chicken Soup Dumplings” with lot codes “03.07.25.C1-1” and “03.07.25.C1-2” printed on the side of the box.\n\nThe products subject to recall bear establishment number “P-46009” inside the USDA mark of inspection. These items were shipped to Trader Joe’s retail locations nationwide.",
+      "gold": {
+        "supplier_names": [
+          "CJ Foods Manufacturing Beaumont Corporation"
+        ],
+        "lot_codes": [
+          "03.07.25.C1-1",
+          "03.07.25.C1-2"
+        ],
+        "production_date_start": "2023-12-07",
+        "production_date_end": "2023-12-07"
+      }
+    },
+    {
+      "id": "fsis-028-2024-brucepac-rte",
+      "authority": "USDA",
+      "source_url": "https://www.fsis.usda.gov/recalls-alerts/brucepac-recalls-ready-eat-meat-and-poultry-products-due-possible-listeria",
+      "source_title": "BrucePac Recalls Ready-To-Eat Meat and Poultry Products Due to Possible Listeria Contamination",
+      "notice_text": "WASHINGTON, Oct. 9, 2024 – BrucePac, a Durant, Okla. establishment, is recalling approximately 11,765,285 pounds of ready-to-eat (RTE) meat and poultry products that may be adulterated with Listeria monocytogenes, the U.S. Department of Agriculture’s Food Safety and Inspection Service (FSIS) announced today.\n\nThe ready-to-eat meat and poultry items were produced from May 31, 2024, to October 8, 2024. These products were shipped to other establishments and distributors nationwide then distributed to restaurants, schools and institutions. Information regarding product labels and the list of products will be provided when available.\n\nThe products subject to recall bear establishment numbers \"51205 or P-51205\" inside or under the USDA mark of inspection.\n\nThe problem was discovered after FSIS performed routine product testing of finished product containing RTE poultry products produced by BrucePac and confirmed those products positive for Listeria monocytogenes.",
+      "gold": {
+        "supplier_names": [
+          "BrucePac"
+        ],
+        "lot_codes": [],
+        "production_date_start": "2024-05-31",
+        "production_date_end": "2024-10-08"
+      }
+    },
+    {
+      "id": "fda-2024-sunco-frenchie-raisins",
+      "authority": "FDA",
+      "source_url": "https://www.fda.gov/safety/recalls-market-withdrawals-safety-alerts/sunco-frenchie-issues-allergy-alert-undeclared-sulfites-golden-raisins",
+      "source_title": "Sunco & Frenchie Issues an Allergy Alert on Undeclared Sulfites in Golden Raisins",
+      "notice_text": "Sunco & Frenchie LLC of Pine Brook, New Jersey is recalling its 10oz Terrafina Golden Raisins because they may contain undeclared sulfites. People who have an allergy or severe sensitivity to sulfites run the risk of serious or life-threatening allergic reaction if they consume these products.\n\nTerrafina Golden Raisins were distributed in New York through retail stores by distributor Smith Valley Foods, LLC.\n\nThe product comes in a 10-ounce, clear plastic square-shaped container with bright orange labeling on the front. The back of the product is marked with Best If Used By 08/2025, Lot#GRA240602 and Best If Used By 05/2025, Lot# GDR240901. The UPC is 847938001385. The back of the product indicates the product is distributed by Smith Valley Foods LLC.\n\nNo illnesses have been reported to date.",
+      "gold": {
+        "supplier_names": [
+          "Sunco & Frenchie LLC"
+        ],
+        "lot_codes": [
+          "GRA240602",
+          "GDR240901"
+        ],
+        "production_date_start": null,
+        "production_date_end": null
+      }
+    },
+    {
+      "id": "fda-2024-grimmway-organic-carrots",
+      "authority": "FDA",
+      "source_url": "https://www.fda.gov/safety/recalls-market-withdrawals-safety-alerts/grimmway-farms-recalls-organic-whole-and-select-organic-baby-carrots-may-be-consumers-homes-due",
+      "source_title": "Grimmway Farms Recalls Organic Whole and Select Organic Baby Carrots That May Be in Consumers’ Homes Due to Potential E. coli Contamination",
+      "notice_text": "Grimmway Farms has issued a recall of select organic whole carrots and organic baby carrots that should no longer be in grocery stores but may be in consumers' refrigerators or freezers.\n\nThese products may have been contaminated with Shiga toxin-producing Escherichia coli (E. coli) O121:H19.\n\nThe following recalled products were shipped directly to retail distribution centers nationwide in the United States, Puerto Rico, and Canada:\n\nOrganic whole carrots, which do not have a best-if-used-by date printed on the bag, but were available for purchase at retail stores from August 14 through October 23, 2024,\n\nOrganic baby carrots with best-if-used-by-dates ranging from September 11 through November 12, 2024. The recalled carrots should not be available for purchase in stores but may be in consumers' refrigerators or freezers.\n\nThe company is voluntarily recalling these carrots after the Centers for Disease Control and Prevention reported that these products may be associated with an outbreak.",
+      "gold": {
+        "supplier_names": [
+          "Grimmway Farms"
+        ],
+        "lot_codes": [],
+        "production_date_start": null,
+        "production_date_end": null
+      }
+    },
+    {
+      "id": "fsis-034-2024-impero-sausage",
+      "authority": "USDA",
+      "source_url": "https://www.fsis.usda.gov/recalls-alerts/impero-foods-meats-inc--recalls-raw-pork-sausage-products-produced-without-benefit",
+      "source_title": "Impero Foods & Meats, Inc. Recalls Raw Pork Sausage Products Produced Without Benefit of Inspection",
+      "notice_text": "WASHINGTON, Dec. 20, 2024 – Impero Foods & Meats, Inc., a Baltimore, Md. establishment, is recalling approximately 7,485 pounds of raw pork sausage products that were produced without the benefit of federal inspection, the U.S. Department of Agriculture’s Food Safety and Inspection Service (FSIS) announced today.\n\nThe raw Italian pork sausage items were produced from October 3, 2024, through December 19, 2024. The following products are subject to recall [view labels]:\n\n10-lb. white cardboard box cases containing a plastic bag of “Old World Italian Sausage” with “rope” handwritten on the case.\n\n10-lb. white cardboard box cases containing a plastic bag of “Old World Italian Sausage” with “link” handwritten on the case.\n\nThe products subject to recall bear establishment number “EST. 10827” inside the USDA mark of inspection. These items were shipped to restaurants and retail locations in Delaware, Maryland, and Pennsylvania.",
+      "gold": {
+        "supplier_names": [
+          "Impero Foods & Meats, Inc."
+        ],
+        "lot_codes": [],
+        "production_date_start": "2024-10-03",
+        "production_date_end": "2024-12-19"
+      }
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "4b672cf19c9afaacbdf4a3da6883e3ff2689ef688f65c7de0e30999759e0c6e0": {
+    "authority": "FDA",
+    "products": ["fresh yellow onions"],
+    "supplier_names": ["Golden Valley Produce LLC"],
+    "facility_names": ["Golden Valley Packing #2"],
+    "lot_codes": ["GVP-8842", "GVP-8843"],
+    "upcs": [],
+    "production_date_start": "2026-06-20",
+    "production_date_end": "2026-07-02",
+    "distribution_regions": ["California", "Nevada"],
+    "pathogen": "E. coli O157:H7",
+    "action_required": "Do not consume, serve, or further distribute; quarantine remaining product pending further instruction.",
+    "excerpts": {
+      "products": "voluntarily recalling 25 lb sacks of fresh yellow onions",
+      "supplier_names": "Golden Valley Produce LLC of Salinas, California is voluntarily recalling",
+      "facility_names": "packed at the company's Golden Valley Packing #2 facility in Salinas, California",
+      "lot_codes": "lot codes GVP-8842 and GVP-8843",
+      "production_date_start": "between June 20, 2026 and July 2, 2026",
+      "production_date_end": "between June 20, 2026 and July 2, 2026",
+      "distribution_regions": "distributed to wholesalers, foodservice distributors, food banks, and institutional customers in California and Nevada",
+      "pathogen": "potential to be contaminated with Escherichia coli O157:H7 (E. coli O157:H7)",
+      "action_required": "should not consume, serve, or further distribute them, and should quarantine remaining product pending further instruction"
+    },
+    "confidence": 0.95
+  }
+}

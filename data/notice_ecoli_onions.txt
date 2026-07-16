@@ -1,0 +1,14 @@
+FOR IMMEDIATE RELEASE — July 16, 2026
+Company Announcement (posted by FDA): Golden Valley Produce LLC Recalls Fresh Yellow Onions Because of Possible Health Risk
+
+SALINAS, Calif. — Golden Valley Produce LLC of Salinas, California is voluntarily recalling 25 lb sacks of fresh yellow onions, lot codes GVP-8842 and GVP-8843, because the product has the potential to be contaminated with Escherichia coli O157:H7 (E. coli O157:H7), an organism which can cause severe and sometimes life-threatening illness.
+
+The recalled onions were packed at the company's Golden Valley Packing #2 facility in Salinas, California between June 20, 2026 and July 2, 2026, and were distributed to wholesalers, foodservice distributors, food banks, and institutional customers in California and Nevada.
+
+The recall was initiated after routine environmental sampling by the company and follow-up testing by the U.S. Food and Drug Administration (FDA) found E. coli O157:H7 in the packing environment. The Centers for Disease Control and Prevention (CDC) is investigating a multistate outbreak of E. coli O157:H7 infections that may be linked to fresh onions; the investigation is ongoing.
+
+Customers who have the recalled onions should not consume, serve, or further distribute them, and should quarantine remaining product pending further instruction. No lot codes other than GVP-8842 and GVP-8843 are affected at this time.
+
+Consumers and institutional customers with questions may contact Golden Valley Produce LLC at (855) 555-0142, Monday through Friday, 8am to 5pm PT, or recalls@goldenvalleyproduce.example.
+
+THIS IS A SYNTHETIC NOTICE created for the AISCO hackathon demonstration. It is modeled on the structure of real FDA company recall announcements. Golden Valley Produce LLC is fictional.

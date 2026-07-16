@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.env
+.env.*
+.streamlit/secrets.toml
+*.log
+data/*.db-shm
+data/*.db-wal
+deliverables/rendered/
