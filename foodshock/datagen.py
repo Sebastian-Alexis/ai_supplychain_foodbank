@@ -109,13 +109,13 @@ def generate(conn: sqlite3.Connection) -> None:
         ("L-DF-CAR", "PROD-CARROT", "SUP-DF", None, "DF-2211", 600, -4, 15, "WH-OAK"),
         ("L-DF-CAB", "PROD-CABBAGE", "SUP-DF", None, "DF-2214", 500, -3, 10, "WH-OAK"),
         ("L-RVF-APP", "PROD-APPLE", "SUP-RVF", None, "RVF-098", 600, -9, 20, "WH-SJ"),
-        ("L-DF-POT", "PROD-POTATO", "SUP-DF", None, "DF-2190", 700, -12, 30, "WH-SJ"),
+        ("L-DF-POT", "PROD-POTATO", "SUP-DF", None, "DF-2190", 700, -12, 30, "WH-OAK"),
         ("L-PFF-OFZ", "PROD-ONION-FRZ", "SUP-PFF", None, "PFF-771", 400, -20, 200, "WH-OAK"),
         # --- other categories ---
         ("L-PFF-CHK", "PROD-CHICKEN-FRZ", "SUP-PFF", None, "PFF-514", 2500, -15, 250, "WH-OAK"),
         ("L-MWG-RIC", "PROD-RICE", "SUP-MWG", None, "MWG-33", 1800, -30, 600, "WH-SJ"),
         ("L-MWG-PAS", "PROD-PASTA", "SUP-MWG", None, "MWG-41", 1200, -25, 650, "WH-OAK"),
-        ("L-MWG-BEA", "PROD-BEANS-DRY", "SUP-MWG", None, "MWG-29", 2200, -40, 600, "WH-SJ"),
+        ("L-MWG-BEA", "PROD-BEANS-DRY", "SUP-MWG", None, "MWG-29", 2200, -40, 600, "WH-OAK"),
         ("L-BDD-MLK", "PROD-MILK-UHT", "SUP-BDD", None, "BDD-88", 900, -10, 120, "WH-OAK"),
         ("L-GVP-PWD", "PROD-ONION-PWD", "SUP-GVP", None, "GVP-7counter", 150, -60, 400, "WH-SJ"),
         ("L-PFF-CHK-SJ", "PROD-CHICKEN-FRZ", "SUP-PFF", None, "PFF-528", 850, -9, 260, "WH-SJ"),
@@ -134,7 +134,7 @@ def generate(conn: sqlite3.Connection) -> None:
         # (destination = the warehouse already stocking that product line)
         ("PO-1001", "SUP-GVP", "PROD-ONION-Y", 1200, 0.55, -5, 2, "WH-OAK"),
         ("PO-1002", "SUP-GVP", "PROD-ONION-Y", 800, 0.55, -3, 4, "WH-OAK"),
-        ("PO-1003", "SUP-DF", "PROD-POTATO", 1000, 0.46, -4, 2, "WH-SJ"),
+        ("PO-1003", "SUP-DF", "PROD-POTATO", 1000, 0.46, -4, 2, "WH-OAK"),
         ("PO-1004", "SUP-MWG", "PROD-RICE", 1500, 0.75, -6, 5, "WH-SJ"),
         ("PO-1005", "SUP-BDD", "PROD-MILK-UHT", 600, 1.05, -2, 3, "WH-OAK"),
     ]
@@ -180,9 +180,9 @@ def generate(conn: sqlite3.Connection) -> None:
                   "P-SP": "WH-OAK", "P-ALA": "WH-OAK", "P-MIL": "WH-SJ"}
     onion_pantries = ("P-FRU", "P-RIC", "P-HAY", "P-SP")
     produce_mix = {"P-FRU": "PROD-CARROT", "P-RIC": "PROD-CABBAGE", "P-HAY": "PROD-POTATO",
-                   "P-SP": "PROD-APPLE", "P-ALA": "PROD-CARROT", "P-MIL": "PROD-POTATO"}
-    staple = {"P-FRU": "PROD-RICE", "P-RIC": "PROD-BEANS-DRY", "P-HAY": "PROD-PASTA",
-              "P-SP": "PROD-RICE", "P-ALA": "PROD-BEANS-DRY", "P-MIL": "PROD-RICE"}
+                   "P-SP": "PROD-POTATO", "P-ALA": "PROD-CARROT", "P-MIL": "PROD-APPLE"}
+    staple = {"P-FRU": "PROD-PASTA", "P-RIC": "PROD-BEANS-DRY", "P-HAY": "PROD-PASTA",
+              "P-SP": "PROD-PASTA", "P-ALA": "PROD-BEANS-DRY", "P-MIL": "PROD-RICE"}
     n = 0
     for day in range(7):
         for pid, *_ in pantries:

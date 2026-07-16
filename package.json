@@ -1,0 +1,12 @@
+{
+  "name": "foodshock-deliverables",
+  "private": true,
+  "scripts": {
+    "build:deck": "node scripts/build_pitch_deck.js"
+  },
+  "devDependencies": {
+    "image-size": "^2.0.2",
+    "pptxgenjs": "^4.0.1",
+    "qrcode": "^1.5.4"
+  }
+}

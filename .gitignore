@@ -8,4 +8,7 @@ __pycache__/
 *.log
 data/*.db-shm
 data/*.db-wal
+node_modules/
 deliverables/rendered/
+deliverables/video_frames/
+deliverables/video_contact.*

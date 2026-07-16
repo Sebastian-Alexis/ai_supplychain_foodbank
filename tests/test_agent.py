@@ -36,6 +36,8 @@ def test_full_offline_arc():
     assert res.match_counts.get("probable", 0) + res.match_counts.get("possible", 0) >= 1
     assert res.propagation["quarantine_proposed_lb"] > 0
     assert res.propagation["pos_at_risk"] >= 1
+    assert res.propagation["infeasible_lines"] == 28
+    assert res.propagation["infeasible_lb"] == 700.0
     assert res.gaps, "unresolved matches must be routed to human review"
     assert res.narration
     assert res.narration_method in ("template", "cached-llm")  # honest labeling offline
