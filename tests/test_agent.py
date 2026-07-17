@@ -11,20 +11,29 @@ import pytest
 from foodshock.agent import RecallResponseAgent
 from foodshock.datagen import generate
 from foodshock.db import DATA_DIR, rows
-from foodshock.engine import approve_plan, build_plans
+from foodshock.demo_incidents import INCIDENTS, prepare_demo_incident
+from foodshock.engine import BOX_LB, approve_plan, build_plans, incident_focus
 from test_timing import _conn
 
 EVENT_ID = "FDA-DEMO-2026-001"
 PHASE_ORDER = ("observe", "investigate", "explain", "approve")
 
 
-def _run(conn=None):
+def _run_incident(key: str, conn=None, on_event=None):
     conn = conn or _conn()
     generate(conn)
-    raw = (DATA_DIR / "notice_ecoli_onions.txt").read_text()
-    agent = RecallResponseAgent(conn, allow_llm=False)
-    return conn, agent.run(raw, event_id=EVENT_ID,
-                           source_url="https://example.invalid/recall")
+    incident = INCIDENTS[key]
+    prepare_demo_incident(conn, incident)
+    agent = RecallResponseAgent(conn, allow_llm=False, on_event=on_event)
+    return conn, agent.run(
+        incident.notice_path.read_text(),
+        event_id=incident.event_id,
+        source_url=incident.source_url,
+    )
+
+
+def _run(conn=None):
+    return _run_incident("onion_ecoli", conn=conn)
 
 
 def test_full_offline_arc():
@@ -150,3 +159,147 @@ def test_approval_re_evaluates_and_blocks_tampered_latest_plan():
     blocked = rows(conn, "SELECT detail_json FROM audit_log "
                          "WHERE action='plan_approval_blocked' ORDER BY id DESC LIMIT 1")
     assert blocked and json.loads(blocked[0]["detail_json"])["hard_constraint_violations"] > 0
+
+
+@pytest.mark.parametrize(
+    ("incident_key", "category", "dos_before", "dos_after"),
+    [
+        ("onion_ecoli", "produce", 4.8, None),
+        ("chicken_salmonella", "protein", 0.0, 0.0),
+        ("pasta_allergen", "grain", None, None),
+    ],
+)
+def test_incident_catalog_uses_the_matching_supply_category(
+    incident_key, category, dos_before, dos_after
+):
+    conn, res = _run_incident(incident_key)
+
+    focus = incident_focus(conn, res.event_id)
+    assert focus["category"] == category
+    assert res.before_after["focus_category"] == category
+    assert res.before_after["focus_dos_conservative_before"] == dos_before
+    assert res.before_after["focus_dos_conservative_after"] == dos_after
+    assert f"{category.title()} days of supply" in res.narration
+    for metrics in (
+        res.before_after["baseline"],
+        res.before_after["recommended"],
+    ):
+        assert metrics["boxes_disrupted"] == int(
+            round(metrics["unmet_demand_lb"] / BOX_LB)
+        )
+
+
+@pytest.mark.parametrize(
+    ("incident_key", "action", "product_id", "note", "subject_product"),
+    [
+        (
+            "chicken_salmonella",
+            "purchase",
+            "PROD-CHICKEN-FRZ",
+            "Equivalent frozen protein from a verified alternate supplier",
+            "Frozen chicken quarters",
+        ),
+        (
+            "pasta_allergen",
+            "transfer",
+            "PROD-RICE",
+            "inter-warehouse shuttle",
+            "Dry pasta",
+        ),
+    ],
+)
+def test_alternate_incidents_produce_specific_recovery_and_comms(
+    incident_key, action, product_id, note, subject_product
+):
+    conn, res = _run_incident(incident_key)
+    comms = approve_plan(conn, res.recommended_id, "operator-jane", allow_llm=False)
+
+    lines = rows(
+        conn,
+        "SELECT action, product_id, note FROM plan_lines WHERE plan_id=?",
+        (res.recommended_id,),
+    )
+    assert any(
+        line["action"] == action
+        and line["product_id"] == product_id
+        and line["note"] == note
+        for line in lines
+    )
+    pantry = next(c for c in comms if c["audience"] == "pantry_coordinators")
+    assert subject_product in pantry["subject"]
+    assert "onion" not in f"{pantry['subject']} {pantry['body']}".lower()
+    if incident_key == "pasta_allergen":
+        assert "Reroute 1827 lb White rice" in pantry["body"]
+
+
+def test_event_callback_covers_replay_stages_without_inflating_runtime(monkeypatch):
+    clock = [0.0]
+    events = []
+
+    def fake_counter():
+        return clock[0]
+
+    def observe(event):
+        events.append((event["seq"], event["phase"], event["kind"], event["name"]))
+        clock[0] += 1.0
+
+    monkeypatch.setattr("foodshock.agent.time.perf_counter", fake_counter)
+    conn, res = _run_incident("onion_ecoli", on_event=observe)
+
+    required = {
+        ("observe", "tool_result", "ingest_notice"),
+        ("investigate", "tool_result", "extract_notice"),
+        ("investigate", "tool_result", "resolve_entity"),
+        ("investigate", "tool_result", "propagate"),
+        ("explain", "tool_result", "project_supply"),
+        ("explain", "tool_result", "optimize_recovery"),
+        ("approve", "narration", "request_approval"),
+    }
+    assert required <= {(phase, kind, name) for _, phase, kind, name in events}
+    assert [seq for seq, *_ in events] == list(range(1, len(events) + 1))
+    assert len(events) == rows(
+        conn,
+        "SELECT COUNT(*) c FROM agent_transcript WHERE run_id=?",
+        (res.run_id,),
+    )[0]["c"]
+    assert res.runtime_s == 0.0
+
+
+@pytest.mark.parametrize(
+    ("incident_key", "action", "product_id"),
+    [
+        ("chicken_salmonella", "purchase", "PROD-CHICKEN-FRZ"),
+        ("pasta_allergen", "transfer", "PROD-RICE"),
+    ],
+)
+def test_solver_fallback_recovers_nonproduce_incidents(
+    monkeypatch, incident_key, action, product_id
+):
+    def unavailable_solver(*_args):
+        return {}, {}, {}, "forced-test-failure"
+
+    monkeypatch.setattr("foodshock.engine._solve_lp", unavailable_solver)
+    conn, res = _run_incident(incident_key)
+
+    plan = rows(
+        conn,
+        "SELECT method, metrics_json FROM plans WHERE plan_id=?",
+        (res.recommended_id,),
+    )[0]
+    assert plan["method"] == "greedy-fallback"
+    assert json.loads(plan["metrics_json"])["hard_constraint_violations"] == 0
+    lines = rows(
+        conn,
+        "SELECT action, product_id FROM plan_lines WHERE plan_id=?",
+        (res.recommended_id,),
+    )
+    assert any(
+        line["action"] == action and line["product_id"] == product_id
+        for line in lines
+    )
+    fallback = rows(
+        conn,
+        "SELECT detail_json FROM audit_log WHERE action='lp_fallback'",
+    )
+    assert len(fallback) == 1
+    assert json.loads(fallback[0]["detail_json"])["status"] == "forced-test-failure"

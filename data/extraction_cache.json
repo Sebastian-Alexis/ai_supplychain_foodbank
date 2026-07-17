@@ -23,5 +23,53 @@
       "action_required": "should not consume, serve, or further distribute them, and should quarantine remaining product pending further instruction"
     },
     "confidence": 0.95
+  },
+  "abd99549da3f68600265007741c2575bbb553fd1c5449e01d5223dea0b1014e0": {
+    "authority": "FDA",
+    "products": ["frozen chicken quarters"],
+    "supplier_names": ["Pacific Frozen Foods"],
+    "facility_names": [],
+    "lot_codes": ["PFF-514"],
+    "upcs": [],
+    "production_date_start": "2026-06-25",
+    "production_date_end": "2026-07-07",
+    "distribution_regions": ["California"],
+    "pathogen": "Salmonella",
+    "action_required": "Do not consume, serve, or further distribute; quarantine remaining cases and contact the supplier.",
+    "excerpts": {
+      "products": "voluntarily recalling 40 lb cases of frozen chicken quarters",
+      "supplier_names": "Pacific Frozen Foods of Fremont, California is voluntarily recalling",
+      "lot_codes": "lot code PFF-514",
+      "production_date_start": "between June 25, 2026 and July 7, 2026",
+      "production_date_end": "between June 25, 2026 and July 7, 2026",
+      "distribution_regions": "distributed to food banks, institutional kitchens, and foodservice customers in California",
+      "pathogen": "may be contaminated with Salmonella",
+      "action_required": "should not consume, serve, or further distribute the affected product. Quarantine remaining cases and contact the supplier for disposition instructions"
+    },
+    "confidence": 0.97
+  },
+  "889c8e21477a9c58d31319b52e728062a3eac4219593f883b7784fac9684079c": {
+    "authority": "FDA",
+    "products": ["dry pasta"],
+    "supplier_names": ["Midwest Grains Co-op"],
+    "facility_names": [],
+    "lot_codes": ["MWG-41"],
+    "upcs": [],
+    "production_date_start": "2026-06-15",
+    "production_date_end": "2026-06-30",
+    "distribution_regions": ["California"],
+    "pathogen": "Undeclared milk allergen",
+    "action_required": "Do not consume, serve, or further distribute; quarantine remaining cases and contact the supplier.",
+    "excerpts": {
+      "products": "voluntarily recalling 20 lb cases of dry pasta",
+      "supplier_names": "Midwest Grains Co-op of Sacramento, California is voluntarily recalling",
+      "lot_codes": "lot code MWG-41",
+      "production_date_start": "between June 15, 2026 and June 30, 2026",
+      "production_date_end": "between June 15, 2026 and June 30, 2026",
+      "distribution_regions": "distributed to food banks and institutional customers in California",
+      "pathogen": "may contain milk that is not declared on the label",
+      "action_required": "should not consume, serve, or further distribute the affected pasta. Quarantine remaining cases and contact the supplier for disposition instructions"
+    },
+    "confidence": 0.98
   }
 }

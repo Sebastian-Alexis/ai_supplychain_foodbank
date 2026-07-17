@@ -73,9 +73,12 @@ def main(argv: list[str] | None = None) -> int:
           f"review {res.propagation['review_lb']:g} lb · "
           f"{res.propagation['pos_at_risk']} PO(s) at risk · "
           f"{res.propagation['infeasible_lines']} infeasible distribution line(s)")
-    print(f"[produce days of supply] conservative {_fmt_dos(ba['produce_dos_conservative_before'])} "
-          f"-> {_fmt_dos(ba['produce_dos_conservative_after'])} with plan "
-          f"(optimistic {_fmt_dos(res.days_of_supply['optimistic'].get('produce'))})")
+    focus_category = ba["focus_category"]
+    focus_label = focus_category.replace("_", " ")
+    print(f"[{focus_label} days of supply] conservative "
+          f"{_fmt_dos(ba['focus_dos_conservative_before'])} "
+          f"-> {_fmt_dos(ba['focus_dos_conservative_after'])} with plan "
+          f"(optimistic {_fmt_dos(res.days_of_supply['optimistic'].get(focus_category))})")
     print(f"[plans] baseline {res.baseline_id}: served {base['served_lb']:g} lb, "
           f"unmet {base['unmet_demand_lb']:g} lb, ${base['procurement_cost']:g}")
     print(f"[plans] recommended {res.recommended_id}: served {rec['served_lb']:g} lb, "

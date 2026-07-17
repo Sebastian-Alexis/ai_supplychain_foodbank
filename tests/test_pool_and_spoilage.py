@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from foodshock.db import available_lots, expected_pos, insert, now_iso, rows
-from foodshock.engine import (build_plans, project_supply, propagate,
+from foodshock.engine import (BOX_LB, build_plans, project_supply, propagate,
                               review_match)
 from test_timing import DAILY, TOL, _d, _lines, _metrics, _mini_db
 
@@ -155,6 +155,24 @@ def test_stock_outliving_horizon_is_not_spoilage():
     assert m["hard_constraint_violations"] == 0
     assert m["unmet_demand_lb"] <= TOL
     assert m["spoilage_lb"] == 0.0
+
+
+# ------------------------------------------------- disruption metric scope
+
+def test_boxes_disrupted_counts_nonproduce_unmet_demand():
+    """A protein-only shortfall still disrupts food boxes."""
+    conn = _mini_db()
+    conn.execute("UPDATE products SET category='protein'")
+    conn.execute("UPDATE pantry_demand SET category='protein'")
+    conn.commit()
+
+    _, rec_id = build_plans(conn)
+    metrics = _metrics(conn, rec_id)
+
+    assert metrics["unmet_demand_lb"] == 7 * DAILY
+    assert metrics["boxes_disrupted"] == int(
+        round(metrics["unmet_demand_lb"] / BOX_LB)
+    )
 
 
 # -------------------------------------------------- incident attribution

@@ -15,41 +15,61 @@ Run:  streamlit run streamlit_app.py
 """
 
 from __future__ import annotations
+from collections.abc import Callable
 
 import json
 import os
 import shutil
 import sqlite3
-from html import escape
 import tempfile
+import time
+from html import escape
 from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from foodshock.agent import RecallResponseAgent
+from foodshock.agent import AgentRunResult, RecallResponseAgent
 from foodshock.datagen import generate
+from foodshock.demo_incidents import (DEFAULT_INCIDENT_KEY, INCIDENTS,
+                                      DemoIncident, incident_for_event,
+                                      prepare_demo_incident)
 from foodshock.db import DEFAULT_DB, get_conn, rows
-from foodshock.engine import (HORIZON_DAYS, approve_plan, build_plans,
-                              days_of_supply, project_supply, propagate,
-                              review_match)
+from foodshock.engine import (BOX_LB, HORIZON_DAYS, approve_plan, build_plans,
+                              days_of_supply, incident_focus, project_supply,
+                              propagate, review_match)
 from foodshock.extraction import ExtractionUnavailable
 from foodshock.schemas import SCENARIO_LABELS, SCENARIOS
 from foodshock.viz import (STATE_COLORS, graph_figure, latest_event_id,
                            latest_plan_ids, lineage_graph, map_arcs, map_deck,
                            map_points)
 
-st.set_page_config(page_title="FoodShock | Recall response", layout="wide")
+st.set_page_config(page_title="FoodShock | Agentic response framework", layout="wide")
 
 ALLOW_LLM = os.environ.get("FOODSHOCK_LIVE_LLM", "") == "1"
-NOTICE_PATH = Path(__file__).parent / "data" / "notice_ecoli_onions.txt"
-DEMO_EVENT = "FDA-DEMO-2026-001"
 OPERATOR = "operator (streamlit)"
 
 SAFETY_CAPTION = ("Confirmed recalled or quarantined lots and canceled POs are excluded "
                   "from every scenario and every plan; no toggle re-includes them (PLAN.md §10).")
 STATE_ORDER = ["confirmed", "probable", "possible", "unknown", "not_matched"]
+
+REPLAY_STAGES: dict[tuple[str, str, str], tuple[int, str]] = {
+    ("observe", "tool_result", "ingest_notice"):
+        (12, "Notice ingested into the incident record"),
+    ("investigate", "tool_result", "extract_notice"):
+        (28, "Entities validated against source excerpts"),
+    ("investigate", "tool_result", "resolve_entity"):
+        (46, "Lots and purchase orders resolved by evidence tier"),
+    ("investigate", "tool_result", "propagate"):
+        (62, "Exposure propagated through warehouse commitments"),
+    ("explain", "tool_result", "project_supply"):
+        (74, "Seven-day supply scenarios projected"),
+    ("explain", "tool_result", "optimize_recovery"):
+        (88, "Constrained recovery plan optimized"),
+    ("approve", "narration", "request_approval"):
+        (100, "Operator approval package ready"),
+}
 
 def _inject_theme() -> None:
     st.markdown(
@@ -155,31 +175,39 @@ def _inject_theme() -> None:
           padding: 0.8rem 0.95rem;
         }
         [data-testid="stMetricValue"] { color: var(--fs-ink); font-weight: 800; }
+        [data-testid="stButton"] button { border-radius: 2px; font-weight: 700; }
         [data-testid="stButton"] button[kind="primary"] {
           background: var(--fs-coral);
           border-color: var(--fs-coral);
           color: #fffdf8;
           font-weight: 750;
         }
-        [data-testid="stButton"] button { border-radius: 2px; font-weight: 700; }
         [data-testid="stSidebar"] [data-testid="stButton"] button {
+          width: 100%;
+        }
+        [data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"] {
           background: var(--fs-coral) !important;
           border: 1px solid var(--fs-coral) !important;
+          color: #fffdf8 !important;
+        }
+        [data-testid="stSidebar"] [data-testid="stButton"] button[kind="secondary"] {
+          background: rgba(255, 253, 248, 0.06) !important;
+          border: 1px solid #54736f !important;
           color: #fffdf8 !important;
         }
         [data-testid="stSidebar"] [data-testid="stButton"] button p,
         [data-testid="stSidebar"] [data-testid="stButton"] button span {
           color: #fffdf8 !important;
         }
-        [data-testid="stSidebar"] [data-testid="stButton"] button:hover,
-        [data-testid="stSidebar"] [data-testid="stButton"] button:focus-visible {
+        [data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"]:hover,
+        [data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"]:focus-visible {
           background: #8f3427 !important;
           border-color: #8f3427 !important;
-          color: #fffdf8 !important;
         }
-        [data-testid="stSidebar"] [data-testid="stButton"] button:hover p,
-        [data-testid="stSidebar"] [data-testid="stButton"] button:focus-visible p {
-          color: #fffdf8 !important;
+        [data-testid="stSidebar"] [data-testid="stButton"] button[kind="secondary"]:hover,
+        [data-testid="stSidebar"] [data-testid="stButton"] button[kind="secondary"]:focus-visible {
+          background: rgba(255, 253, 248, 0.14) !important;
+          border-color: #91c9c1 !important;
         }
         [data-testid="stSidebar"] [data-testid="stButton"] button:focus-visible {
           outline: 3px solid #d5bd7b;
@@ -202,6 +230,191 @@ def _inject_theme() -> None:
         [data-testid="stPlotlyChart"] {
           background: var(--fs-paper);
           border: 1px solid var(--fs-line);
+        }
+        .fs-project-kicker,
+        .fs-side-section {
+          color: #91c9c1;
+          font-size: 0.68rem;
+          font-weight: 800;
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+        }
+        .fs-project-copy {
+          color: #d9e7e4;
+          font-size: 0.86rem;
+          line-height: 1.45;
+          margin: 0.35rem 0 0.8rem;
+        }
+        .fs-side-pills {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.35rem;
+          margin-bottom: 0.8rem;
+        }
+        .fs-side-pills span {
+          background: #214d48;
+          border: 1px solid #3f6c67;
+          color: #dcebe8;
+          font-size: 0.68rem;
+          padding: 0.2rem 0.42rem;
+        }
+        .fs-incident-card {
+          background: rgba(255, 253, 248, 0.055);
+          border: 1px solid #3f625e;
+          border-left: 3px solid #d5bd7b;
+          color: #f7f2e8;
+          margin: 0.45rem 0 0.7rem;
+          padding: 0.7rem 0.75rem;
+        }
+        .fs-incident-card strong {
+          display: block;
+          color: #fffdf8;
+          font-size: 0.9rem;
+          margin-bottom: 0.2rem;
+        }
+        .fs-incident-card span {
+          color: #b9cbc8;
+          font-size: 0.76rem;
+          line-height: 1.35;
+        }
+        .fs-tech-hero {
+          position: relative;
+          overflow: hidden;
+          background: var(--fs-ink);
+          border-left: 6px solid var(--fs-coral);
+          color: #fffdf8;
+          padding: 2.2rem 2.35rem;
+          margin-bottom: 1.2rem;
+        }
+        .fs-tech-hero::after {
+          content: "";
+          position: absolute;
+          width: 24rem;
+          height: 24rem;
+          right: -8rem;
+          top: -11rem;
+          border: 1px solid #34524f;
+          border-radius: 50%;
+          box-shadow: 0 0 0 2.8rem rgba(52, 82, 79, 0.22),
+                      0 0 0 5.6rem rgba(52, 82, 79, 0.12);
+        }
+        .fs-tech-eyebrow {
+          color: #91c9c1;
+          font-size: 0.72rem;
+          font-weight: 800;
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+        }
+        .fs-tech-hero h1 {
+          position: relative;
+          z-index: 1;
+          color: #fffdf8;
+          font-size: clamp(2.4rem, 5vw, 4.5rem);
+          line-height: 0.95;
+          max-width: 55rem;
+          margin: 0.5rem 0 0.8rem;
+        }
+        .fs-tech-hero p {
+          position: relative;
+          z-index: 1;
+          color: #d9e7e4;
+          font-size: 1.08rem;
+          line-height: 1.5;
+          max-width: 52rem;
+          margin: 0;
+        }
+        .fs-flow {
+          display: grid;
+          grid-template-columns: repeat(7, minmax(0, 1fr));
+          align-items: stretch;
+          gap: 0.45rem;
+          margin: 0.8rem 0 1.5rem;
+        }
+        .fs-flow-node {
+          background: var(--fs-paper);
+          border: 1px solid var(--fs-line);
+          border-top: 3px solid var(--fs-teal);
+          min-height: 7.3rem;
+          padding: 0.75rem;
+        }
+        .fs-flow-node strong {
+          display: block;
+          color: var(--fs-ink);
+          font-size: 0.84rem;
+          margin-bottom: 0.4rem;
+        }
+        .fs-flow-node span {
+          color: #536360;
+          font-size: 0.72rem;
+          line-height: 1.35;
+        }
+        .fs-flow-node.fs-human { border-top-color: var(--fs-coral); }
+        .fs-tech-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 0.8rem;
+          margin: 0.75rem 0 1.5rem;
+        }
+        .fs-tech-card {
+          background: var(--fs-paper);
+          border: 1px solid var(--fs-line);
+          padding: 1rem 1.05rem;
+        }
+        .fs-tech-card .fs-card-index {
+          color: var(--fs-coral);
+          font-size: 0.7rem;
+          font-weight: 850;
+          letter-spacing: 0.12em;
+        }
+        .fs-tech-card strong {
+          display: block;
+          color: var(--fs-ink);
+          font-size: 1rem;
+          margin: 0.25rem 0 0.35rem;
+        }
+        .fs-tech-card span {
+          color: #536360;
+          font-size: 0.82rem;
+          line-height: 1.45;
+        }
+        .fs-lanes {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 0.8rem;
+          margin: 0.8rem 0 1.5rem;
+        }
+        .fs-lane {
+          min-height: 10.5rem;
+          padding: 1.15rem;
+          border: 1px solid var(--fs-line);
+        }
+        .fs-lane.language { background: #e8f1ee; border-top: 4px solid var(--fs-teal); }
+        .fs-lane.control { background: #f6e8e2; border-top: 4px solid var(--fs-coral); }
+        .fs-lane h3 { margin: 0 0 0.45rem; }
+        .fs-lane p { color: #425451; font-size: 0.88rem; line-height: 1.5; }
+        .fs-safety-strip {
+          display: grid;
+          grid-template-columns: 1.1fr 2.9fr;
+          background: var(--fs-ink);
+          color: #d9e7e4;
+          margin: 0.8rem 0 1.5rem;
+          padding: 1.1rem 1.25rem;
+        }
+        .fs-safety-strip strong {
+          color: #fffdf8;
+          font-size: 1.05rem;
+        }
+        .fs-safety-strip span {
+          border-left: 1px solid #3f625e;
+          font-size: 0.86rem;
+          line-height: 1.45;
+          padding-left: 1rem;
+        }
+        @media (max-width: 900px) {
+          .fs-flow { grid-template-columns: 1fr 1fr; }
+          .fs-tech-grid, .fs-lanes { grid-template-columns: 1fr; }
+          .fs-safety-strip { grid-template-columns: 1fr; gap: 0.6rem; }
+          .fs-safety-strip span { border-left: 0; padding-left: 0; }
         }
         code { color: #185d56; }
         </style>
@@ -251,12 +464,21 @@ def _scenario_ready(conn: sqlite3.Connection) -> bool:
     return bool(ok) and rows(conn, "SELECT COUNT(*) c FROM suppliers")[0]["c"] > 0
 
 
-def _replay_incident(conn: sqlite3.Connection) -> None:
-    """Reset scenario and run the canned recall through the agent (§14 arc)."""
+def _replay_incident(
+    conn: sqlite3.Connection,
+    incident: DemoIncident,
+    *,
+    on_event: Callable[[dict], None] | None = None,
+) -> AgentRunResult:
+    """Reset the synthetic network and run one selected incident end to end."""
     generate(conn)
-    agent = RecallResponseAgent(conn, allow_llm=ALLOW_LLM)
-    agent.run(NOTICE_PATH.read_text(), event_id=DEMO_EVENT,
-              source_url="https://example.invalid/recall")
+    prepare_demo_incident(conn, incident)
+    agent = RecallResponseAgent(conn, allow_llm=ALLOW_LLM, on_event=on_event)
+    return agent.run(
+        incident.notice_path.read_text(),
+        event_id=incident.event_id,
+        source_url=incident.source_url,
+    )
 
 
 def _recompute(conn: sqlite3.Connection, event_id: str) -> None:
@@ -332,7 +554,7 @@ def view_exposure(conn, event_id: str) -> None:
             "Production window": (f"{ext.get('production_date_start') or '?'} to "
                                   f"{ext.get('production_date_end') or '?'}"),
             "Regions": ", ".join(ext.get("distribution_regions", [])) or "—",
-            "Pathogen": ext.get("pathogen") or "—",
+            "Hazard": ext.get("pathogen") or "—",
             "Action required": ext.get("action_required") or "—",
         }
         st.table(pd.DataFrame({"fact": facts.keys(), "extracted value": facts.values()}))
@@ -430,6 +652,8 @@ def view_impact(conn, event_id: str) -> None:
         SELECT COALESCE(SUM(l.quantity_lb),0) lb FROM inventory_lots l WHERE l.status='available'
         AND EXISTS (SELECT 1 FROM matches m WHERE m.target_type='lot' AND m.target_id=l.lot_id
                     AND m.reviewed=0 AND m.state IN ('probable','possible','unknown'))""")[0]["lb"]
+    focus = incident_focus(conn, event_id)
+    focus_label = focus["category"].replace("_", " ").title()
 
     dos = {s: days_of_supply(project_supply(conn, s)) for s in SCENARIOS}
     c = st.columns(5)
@@ -437,8 +661,10 @@ def view_impact(conn, event_id: str) -> None:
     c[1].metric("Awaiting human review", f"{review_lb:g} lb")
     c[2].metric("Inbound POs at risk", at_risk)
     c[3].metric("Infeasible distribution lines", inf["n"], f"{inf['lb']:g} lb planned", delta_color="off")
-    c[4].metric("Produce days of supply (conservative)", _fmt_dos(dos["conservative"].get("produce")),
-                f"optimistic {_fmt_dos(dos['optimistic'].get('produce'))}", delta_color="off")
+    c[4].metric(f"{focus_label} days of supply (conservative)",
+                _fmt_dos(dos["conservative"].get(focus["category"])),
+                f"optimistic {_fmt_dos(dos['optimistic'].get(focus['category']))}",
+                delta_color="off")
     st.caption(SAFETY_CAPTION)
 
     st.divider()
@@ -553,6 +779,8 @@ def view_plan(conn, event_id: str) -> None:
     base = rows(conn, "SELECT * FROM plans WHERE plan_id=?", (base_id,))[0]
     rec = rows(conn, "SELECT * FROM plans WHERE plan_id=?", (rec_id,))[0]
     bm, rm = _metrics(base), _metrics(rec)
+    focus = incident_focus(conn, event_id)
+    focus_label = focus["category"].replace("_", " ").title()
 
     st.caption(f"Comparing latest pair: {base_id} (do-nothing) vs {rec_id} "
                f"({rec['method']}). Earlier drafts are superseded and retained in the audit trail.")
@@ -570,16 +798,22 @@ def view_plan(conn, event_id: str) -> None:
     c[3].metric("Procurement cost", f"${rm.get('procurement_cost', 0):,.0f}",
                 f"${rm.get('procurement_cost', 0) - bm.get('procurement_cost', 0):+,.0f}",
                 delta_color="off")
-    c = st.columns(4)
+    c = st.columns(5)
     c[0].metric("Spoilage", f"{rm.get('spoilage_lb', 0):,.10g} lb",
-                f"{rm.get('spoilage_lb', 0) - bm.get('spoilage_lb', 0):+,.10g}", delta_color="inverse")
-    c[1].metric("Boxes disrupted", rm.get("boxes_disrupted", 0),
-                f"{rm.get('boxes_disrupted', 0) - bm.get('boxes_disrupted', 0):+d}",
+                f"{rm.get('spoilage_lb', 0) - bm.get('spoilage_lb', 0):+,.10g}",
                 delta_color="inverse")
-    c[2].metric("Hard-constraint violations", rm.get("hard_constraint_violations", 0),
+    c[1].metric("Food boxes disrupted", rm.get("boxes_disrupted", 0),
+                f"{rm.get('boxes_disrupted', 0) - bm.get('boxes_disrupted', 0):+d}",
+                delta_color="inverse",
+                help=f"All unmet demand converted at the stated {BOX_LB:g} lb/box assumption")
+    c[2].metric("Response focus", focus_label,
+                f"{len(focus['products'])} evidence-linked catalog product(s)",
+                delta_color="off")
+    c[3].metric("Hard-constraint violations", rm.get("hard_constraint_violations", 0),
                 help="Deterministic re-evaluation of the stored plan lines (PLAN.md §15)")
-    c[3].metric("Produce days of supply (conservative)",
-                _fmt_dos(dos_a.get("produce")), f"from {_fmt_dos(dos_b.get('produce'))} without plan",
+    c[4].metric(f"{focus_label} days of supply (conservative)",
+                _fmt_dos(dos_a.get(focus["category"])),
+                f"from {_fmt_dos(dos_b.get(focus['category']))} without plan",
                 delta_color="off")
 
     st.divider()
@@ -698,12 +932,231 @@ def view_map(conn, event_id: str) -> None:
                 "recommended plan.")
 
 
+def _run_animated_replay(
+    conn: sqlite3.Connection,
+    incident: DemoIncident,
+) -> AgentRunResult:
+    """Render the real agent event stream with a deliberate presentation pace."""
+    seen: set[tuple[str, str, str]] = set()
+    with st.sidebar.status(
+        f"Running {incident.title.lower()}…",
+        expanded=True,
+    ) as run_status:
+        progress = st.progress(0, text="Preparing a fresh synthetic network")
+
+        def show_event(event: dict) -> None:
+            key = (event["phase"], event["kind"], event["name"])
+            stage = REPLAY_STAGES.get(key)
+            if stage is None or key in seen:
+                return
+            seen.add(key)
+            value, label = stage
+            progress.progress(value, text=label)
+            run_status.write(f"{len(seen):02d} · {label}")
+            time.sleep(0.22)
+
+        result = _replay_incident(conn, incident, on_event=show_event)
+        progress.progress(100, text="Plan ready for operator review")
+        run_status.update(
+            label=f"{incident.title} ready",
+            state="complete",
+            expanded=True,
+        )
+        time.sleep(0.45)
+        return result
+
+
+def _technical_page(conn: sqlite3.Connection) -> None:
+    """Judge-facing explanation of the framework, backed by the current run."""
+    ready = _scenario_ready(conn)
+    event_id = latest_event_id(conn) if ready else None
+    active_incident = incident_for_event(event_id)
+    run_id = _latest_run_id(conn) if ready else None
+
+    transcript_events = 0
+    tool_calls = 0
+    open_gaps = 0
+    rec_id = None
+    plan_status = "not run"
+    hard_violations: int | str = "—"
+    if run_id:
+        transcript_events = rows(
+            conn,
+            "SELECT COUNT(*) c FROM agent_transcript WHERE run_id=?",
+            (run_id,),
+        )[0]["c"]
+        tool_calls = rows(
+            conn,
+            "SELECT COUNT(*) c FROM agent_transcript WHERE run_id=? AND kind='tool_call'",
+            (run_id,),
+        )[0]["c"]
+        open_gaps = rows(
+            conn,
+            "SELECT COUNT(*) c FROM agent_transcript WHERE run_id=? AND kind='gap'",
+            (run_id,),
+        )[0]["c"]
+        _, rec_id = latest_plan_ids(conn)
+        if rec_id:
+            plan = rows(conn, "SELECT * FROM plans WHERE plan_id=?", (rec_id,))[0]
+            plan_status = plan["status"]
+            hard_violations = _metrics(plan).get("hard_constraint_violations", "—")
+
+    st.markdown(
+        """
+        <section class="fs-tech-hero">
+          <div class="fs-tech-eyebrow">Technical architecture · bounded agency</div>
+          <h1>Language understands. Code decides. Humans authorize.</h1>
+          <p>
+            FoodShock is a reusable incident-response framework: a code-orchestrated
+            agent turns an unstructured safety notice into evidence-linked operational
+            state, invokes deterministic planning tools, and stops at an approval gate.
+          </p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Transcript events", transcript_events,
+              help="Every narration, tool call, result, and review gap is persisted.")
+    m2.metric("Tool invocations", tool_calls,
+              help="Calls made by the current bounded agent run.")
+    m3.metric("Open review gaps", open_gaps,
+              help="Ambiguous evidence routed to a person rather than silently resolved.")
+    m4.metric("Hard violations", hard_violations,
+              help="Recomputed by deterministic plan evaluation.")
+    if run_id:
+        label = active_incident.title if active_incident else event_id
+        st.caption(
+            f"Live proof from {label} · `{run_id}` · recommended plan "
+            f"`{rec_id}` is **{plan_status}**."
+        )
+    else:
+        st.caption("Run a demo incident from the sidebar to populate these proof points.")
+
+    st.subheader("One explicit incident-response loop")
+    st.markdown(
+        """
+        <div class="fs-flow">
+          <div class="fs-flow-node"><strong>01 · Observe</strong><span>Ingest a notice and retain its raw source.</span></div>
+          <div class="fs-flow-node"><strong>02 · Extract</strong><span>Produce schema-validated entities with verbatim excerpts.</span></div>
+          <div class="fs-flow-node"><strong>03 · Resolve</strong><span>Rank lot and PO matches across four evidence tiers.</span></div>
+          <div class="fs-flow-node"><strong>04 · Propagate</strong><span>Trace exposure into inventory and planned distributions.</span></div>
+          <div class="fs-flow-node"><strong>05 · Project</strong><span>Compute seven-day supply under labeled assumptions.</span></div>
+          <div class="fs-flow-node"><strong>06 · Optimize</strong><span>Build a time-indexed recovery plan against safe supply.</span></div>
+          <div class="fs-flow-node fs-human"><strong>07 · Approve</strong><span>Stop for an operator before any plan-side effect.</span></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.subheader("What makes the framework agentic")
+    st.markdown(
+        """
+        <div class="fs-tech-grid">
+          <div class="fs-tech-card"><div class="fs-card-index">CONTROL LOOP</div><strong>Bounded orchestration</strong><span>RecallResponseAgent owns a visible observe → investigate → explain → approve lifecycle instead of producing one opaque answer.</span></div>
+          <div class="fs-tech-card"><div class="fs-card-index">TOOL GROUNDING</div><strong>State-changing tools</strong><span>Extraction, entity resolution, propagation, projection, optimization, and audit are explicit calls with persisted inputs and results.</span></div>
+          <div class="fs-tech-card"><div class="fs-card-index">MEMORY</div><strong>Operational state</strong><span>SQLite is the system of record. The graph is derived from joins, so a visualization can never become a competing truth store.</span></div>
+          <div class="fs-tech-card"><div class="fs-card-index">UNCERTAINTY</div><strong>Escalation over guessing</strong><span>Probable and possible matches create review gaps; confidence prioritizes work but never declares inventory safe.</span></div>
+          <div class="fs-tech-card"><div class="fs-card-index">PLANNING</div><strong>Constrained action</strong><span>A time-indexed LP reasons over arrivals, expiration, storage, temperature, allergens, budget, and pantry equity.</span></div>
+          <div class="fs-tech-card"><div class="fs-card-index">OBSERVABILITY</div><strong>Replayable evidence</strong><span>The same event stream animating the demo is persisted as the technical transcript judges can inspect.</span></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.subheader("A deliberate intelligence boundary")
+    st.markdown(
+        """
+        <div class="fs-lanes">
+          <section class="fs-lane language">
+            <h3>Language layer</h3>
+            <p><strong>Best at ambiguity:</strong> extract entities from notices, normalize language, explain tradeoffs, and draft operator communications. Structured outputs must survive schema and verbatim-provenance checks.</p>
+            <p>The public demo is offline-safe: approved cached extractions and deterministic templates replace a network dependency without pretending to be a live model evaluation.</p>
+          </section>
+          <section class="fs-lane control">
+            <h3>Deterministic control layer</h3>
+            <p><strong>Best at guarantees:</strong> matching tiers, status transitions, supply pools, unit arithmetic, seven-day projection, optimization, hard constraints, approval validation, and audit.</p>
+            <p>The model never marks food safe, allocates recalled stock, approves a plan, or sends a communication.</p>
+          </section>
+        </div>
+        <div class="fs-safety-strip">
+          <strong>Safety invariant</strong>
+          <span>Confirmed recalled or quarantined lots are removed before planning variables are created. Probable and possible records stay outside the conservative pool until a human explicitly clears them.</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.subheader("Framework tool contract")
+    st.dataframe(
+        pd.DataFrame([
+            {"tool": "extract_notice", "contract": "notice → validated entities + source excerpts",
+             "guard": "unsupported values are cleared"},
+            {"tool": "resolve_entity", "contract": "catalog records → evidence tier + match state",
+             "guard": "ambiguous states route to review"},
+            {"tool": "propagate", "contract": "matches → quarantine, PO risk, infeasible commitments",
+             "guard": "global active-recall state is idempotent"},
+            {"tool": "project_supply", "contract": "safe pool + demand → seven-day projection",
+             "guard": "confirmed stock can never re-enter"},
+            {"tool": "optimize_recovery", "contract": "constraints + offers → baseline and plan",
+             "guard": "budget, timing, storage, temperature, allergens"},
+            {"tool": "approve_plan", "contract": "latest safe draft → approval + draft comms",
+             "guard": "revalidates currency and feasibility"},
+        ]),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    left, right = st.columns([1.05, 1.3])
+    with left:
+        st.subheader("Implementation map")
+        st.table(pd.DataFrame([
+            {"module": "agent.py", "responsibility": "orchestration + event transcript"},
+            {"module": "extraction.py", "responsibility": "schema + provenance boundary"},
+            {"module": "engine.py", "responsibility": "resolution, propagation, projection, LP"},
+            {"module": "db.py", "responsibility": "state, safety pools, audit"},
+            {"module": "viz.py", "responsibility": "derived lineage and map evidence"},
+        ]))
+    with right:
+        st.subheader("Why this generalizes")
+        st.markdown(
+            """
+            The framework does not encode “onion recall” as its workflow. A demo
+            incident supplies a notice and a recovery market; the same agent, tools,
+            state machine, constraints, transcript, and approval contract run unchanged.
+
+            - **Biological hazard:** trace onions and recover produce commitments.
+            - **Cold-chain hazard:** quarantine frozen protein and source a verified replacement.
+            - **Allergen hazard:** isolate pasta and reroute allergen-compatible grain.
+            """
+        )
+
+    st.subheader("Inspect the current agent run")
+    if run_id:
+        with st.expander(
+            f"{run_id} · {transcript_events} persisted events",
+            expanded=True,
+        ):
+            st.code("\n".join(_transcript_lines(conn, run_id)), language=None)
+    else:
+        st.info("No run is loaded. Choose an incident and run the simulation from the sidebar.")
+
+    st.caption(
+        "Demo boundary: synthetic operations, no client PII, no autonomous execution. "
+        "Model extraction accuracy is not claimed without a provenance-complete evaluation run."
+    )
+
+
 # ------------------------------------------------------------------ shell
 
 def main() -> None:
     _inject_theme()
     db_path = _session_db_path()
     conn = get_conn(db_path)
+    ready = _scenario_ready(conn)
+    event_id = latest_event_id(conn) if ready else None
+    active_incident = incident_for_event(event_id)
 
     st.sidebar.markdown(
         """
@@ -711,114 +1164,199 @@ def main() -> None:
           <div class="fs-monogram">FS</div>
           <div class="fs-brand-name">FoodShock</div>
         </div>
+        <div class="fs-project-kicker">Agentic operations framework</div>
+        <div class="fs-project-copy">
+          Converts fragmented safety notices into traceable exposure,
+          constrained recovery options, and a human-gated action plan.
+        </div>
+        <div class="fs-side-pills">
+          <span>Tool grounded</span><span>Offline safe</span><span>Human approved</span>
+        </div>
         """,
         unsafe_allow_html=True,
     )
-    st.sidebar.caption(
-        "Food-bank supply shock radar — recall response with a "
-        "human-approved recovery plan."
-    )
-    st.sidebar.markdown(
-        "**Demo boundary:** all operational data is synthetic "
-        "(public-data-inspired; PLAN.md §3)."
-    )
 
-    ready = _scenario_ready(conn)
-    if not ready:
-        st.sidebar.info("No scenario loaded yet.")
-        _hero(
-            "Supply shock radar",
-            "FoodShock",
-            "Load the synthetic network, replay a food-safety recall, and trace "
-            "the response from implicated lots to a human-approved recovery plan.",
+    if "app_page" not in st.session_state:
+        st.session_state.app_page = "demo"
+    page = st.session_state.app_page
+
+    st.sidebar.markdown('<div class="fs-side-section">Explore</div>',
+                        unsafe_allow_html=True)
+    nav_demo, nav_tech = st.sidebar.columns(2)
+    if nav_demo.button(
+        "Live demo",
+        type="primary" if page == "demo" else "secondary",
+        key="nav_demo",
+    ):
+        st.session_state.app_page = "demo"
+        st.rerun()
+    if nav_tech.button(
+        "Technical",
+        type="primary" if page == "technical" else "secondary",
+        key="nav_technical",
+    ):
+        st.session_state.app_page = "technical"
+        st.rerun()
+
+    st.sidebar.divider()
+    st.sidebar.markdown('<div class="fs-side-section">Choose an incident</div>',
+                        unsafe_allow_html=True)
+    if "selected_incident_key" not in st.session_state:
+        st.session_state.selected_incident_key = (
+            active_incident.key if active_incident else DEFAULT_INCIDENT_KEY
         )
-        st.markdown(
-            "Scenario: **2 warehouses · 6 pantries · 16 lots · 5 inbound POs · "
-            "7-day distribution plan**"
-        )
-        if st.button("Load scenario and replay recall", type="primary"):
-            with st.spinner("Seeding scenario and running RecallResponseAgent..."):
-                try:
-                    _replay_incident(conn)
-                except ExtractionUnavailable as exc:
-                    st.error(f"Extraction unavailable: {exc}")
-                    st.stop()
-            st.rerun()
-        st.stop()
+    selected_key = st.sidebar.selectbox(
+        "Incident to simulate",
+        list(INCIDENTS),
+        format_func=lambda key: INCIDENTS[key].selector_label,
+        key="selected_incident_key",
+        label_visibility="collapsed",
+    )
+    selected_incident = INCIDENTS[selected_key]
+    st.sidebar.markdown(
+        f"""
+        <div class="fs-incident-card">
+          <strong>{escape(selected_incident.title)}</strong>
+          <span>{escape(selected_incident.hazard)} · {escape(selected_incident.product)}</span><br>
+          <span>{escape(selected_incident.response_angle)}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if st.sidebar.button(
-        "Replay recall incident",
+        "Run incident simulation",
         type="primary",
-        help="Reset the scenario and run the canned notice through the agent",
+        help="Reset this session's synthetic network and animate the selected agent run",
+        key="run_incident",
     ):
-        with st.spinner("Resetting scenario and running RecallResponseAgent..."):
-            try:
-                _replay_incident(conn)
-            except ExtractionUnavailable as exc:
-                st.error(f"Extraction unavailable: {exc}")
-                st.stop()
+        try:
+            result = _run_animated_replay(conn, selected_incident)
+        except ExtractionUnavailable as exc:
+            st.sidebar.error(f"Extraction unavailable: {exc}")
+            st.stop()
         st.session_state.replay_count = st.session_state.get("replay_count", 0) + 1
+        st.session_state.last_replay_key = selected_key
+        st.session_state.last_run_id = result.run_id
         st.rerun()
 
     replay_count = st.session_state.get("replay_count", 0)
-    if replay_count:
+    last_replay_key = st.session_state.get("last_replay_key")
+    if replay_count and last_replay_key == selected_key:
         st.sidebar.success(
-            f"Replay {replay_count} complete. Scenario reset and recovery plan regenerated."
+            f"Run {replay_count} complete. {selected_incident.title} is ready for review."
+        )
+    elif active_incident and active_incident.key != selected_key:
+        st.sidebar.info(
+            f"Current run: {active_incident.title}. Run the selection above to switch incidents."
         )
 
-    event_id = latest_event_id(conn)
-    events = [r["event_id"] for r in rows(conn, "SELECT event_id FROM recall_events "
-                                                "ORDER BY ingested_at DESC")]
-    if len(events) > 1:
-        event_id = st.sidebar.selectbox("Incident", events)
+    st.sidebar.markdown('<div class="fs-side-section">Display</div>',
+                        unsafe_allow_html=True)
+    st.sidebar.toggle(
+        "Expand agent trace",
+        value=False,
+        key="expand_trace",
+        help="Open the persisted tool-call transcript in the live demo",
+    )
 
-    st.sidebar.divider()
-    st.sidebar.caption(f"DB: `{db_path.name}` — "
-                       f"{st.session_state.get('db_mode', 'shared via $FOODSHOCK_DB')}")
-    st.sidebar.caption("LLM narration: " + ("live allowed" if ALLOW_LLM
-                       else "cache/template only (zero network)"))
+    with st.sidebar.expander("Project and demo disclosures"):
+        st.markdown(
+            "- **Framework:** bounded orchestration over explicit tools\n"
+            "- **Data:** synthetic operations; no client PII\n"
+            "- **Language layer:** cached extraction/templates in public demo\n"
+            "- **Control:** deterministic matching, projection, optimization\n"
+            "- **Execution:** no plan action without operator approval"
+        )
+    with st.sidebar.expander("Runtime details"):
+        st.caption(
+            f"DB: `{db_path.name}` — "
+            f"{st.session_state.get('db_mode', 'shared via $FOODSHOCK_DB')}"
+        )
+        st.caption(
+            "Language layer: "
+            + ("live model allowed" if ALLOW_LLM else "offline cache/template")
+        )
+
+    if page == "technical":
+        _technical_page(conn)
+        return
+
+    if not ready:
+        _hero(
+            "Interactive framework demo",
+            "Choose an incident. Watch the agent build the response.",
+            "The sidebar seeds a session-isolated synthetic network and animates "
+            "the real tool-event stream from notice ingestion to operator approval.",
+        )
+        st.info("Choose an incident in the sidebar, then run the simulation.")
+        return
 
     if not event_id:
         _hero(
             "Scenario ready",
-            "FoodShock",
-            "The synthetic network is loaded. Replay the recall incident to begin "
-            "the operator workflow.",
+            "No active incident",
+            "Choose an incident in the sidebar to start the operator workflow.",
         )
-        st.info("Scenario loaded; no recall incident yet. Use 'Replay recall incident'.")
-        st.stop()
+        return
 
-    _hero(
-        f"Active incident · {event_id}",
-        "Recall response command center",
-        "Trace the implicated lot to each pantry, quantify seven-day supply risk, "
-        "and review a feasible recovery plan before anything executes.",
+    active_incident = incident_for_event(event_id)
+    eyebrow = f"Active incident · {event_id}"
+    subtitle = (
+        active_incident.response_angle
+        if active_incident
+        else "Trace exposure, quantify seven-day supply risk, and review a feasible recovery plan."
     )
+    if active_incident:
+        eyebrow += f" · {active_incident.hazard}"
+    _hero(
+        eyebrow,
+        "Recall response command center",
+        subtitle,
+    )
+
     run_id = _latest_run_id(conn)
     if run_id:
-        expl = rows(conn, "SELECT content_json FROM agent_transcript WHERE run_id=? "
-                          "AND kind='narration' AND name='explain' ORDER BY seq DESC LIMIT 1",
-                    (run_id,))
+        expl = rows(
+            conn,
+            "SELECT content_json FROM agent_transcript WHERE run_id=? "
+            "AND kind='narration' AND name='explain' ORDER BY seq DESC LIMIT 1",
+            (run_id,),
+        )
         if expl:
-            c = json.loads(expl[0]["content_json"])
-            st.markdown(f"**Agent ({c['method']}):** {c['text']}")
-        ba_row = rows(conn, "SELECT content_json FROM agent_transcript WHERE run_id=? "
-                            "AND kind='tool_result' AND name='before_after' "
-                            "ORDER BY seq DESC LIMIT 1", (run_id,))
+            content = json.loads(expl[0]["content_json"])
+            st.markdown(f"**Agent ({content['method']}):** {content['text']}")
+        ba_row = rows(
+            conn,
+            "SELECT content_json FROM agent_transcript WHERE run_id=? "
+            "AND kind='tool_result' AND name='before_after' "
+            "ORDER BY seq DESC LIMIT 1",
+            (run_id,),
+        )
         if ba_row:
-            rt = json.loads(ba_row[0]["content_json"])["result"].get("runtime_s")
-            if rt is not None:
-                st.caption(f"Response-planning time: {rt:g} s measured for this run, "
-                           "notice to draft plan. Comparator: 2.0 staff-hours from a "
-                           "hypothetical task model (20m triage + 60m trace + 25m replan "
-                           "+ 15m comms); not operator-validated.")
-        lines = _transcript_lines(conn, run_id)
-        with st.expander(f"Agent transcript — {run_id} ({len(lines)} steps: "
-                         "observe → investigate → explain → approve)"):
-            st.code("\n".join(lines), language=None)
+            runtime_s = json.loads(ba_row[0]["content_json"])["result"].get("runtime_s")
+            if runtime_s is not None:
+                st.caption(
+                    f"Response-planning time: {runtime_s:g} s measured for this run, "
+                    "notice to draft plan. Comparator: 2.0 staff-hours from a "
+                    "hypothetical task model (20m triage + 60m trace + 25m replan "
+                    "+ 15m comms); not operator-validated."
+                )
+        transcript = _transcript_lines(conn, run_id)
+        with st.expander(
+            f"Agent transcript — {run_id} ({len(transcript)} steps: "
+            "observe → investigate → explain → approve)",
+            expanded=st.session_state.get("expand_trace", False),
+        ):
+            st.code("\n".join(transcript), language=None)
 
-    tabs = st.tabs(["1 · Exposure queue", "2 · Impact dashboard", "3 · Recovery plan",
-                    "4 · Supply-chain graph", "5 · Map"])
+    tabs = st.tabs([
+        "1 · Exposure queue",
+        "2 · Impact dashboard",
+        "3 · Recovery plan",
+        "4 · Supply-chain graph",
+        "5 · Map",
+    ])
     with tabs[0]:
         view_exposure(conn, event_id)
     with tabs[1]:

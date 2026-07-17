@@ -217,7 +217,7 @@ async function build() {
       if (i < flow.length - 1) addArrow(slide, flowX[i] + 0.72, 1.81, flowX[i + 1] - 0.04, 1.81, C.aqua, 1.3);
     });
 
-    addMetricCard(slide, 8.45, 3.55, 1.3, 1.45, '0.81s', 'planning time', C.aqua, 'latest seeded run');
+    addMetricCard(slide, 8.45, 3.55, 1.3, 1.45, '1.20s', 'planning time', C.aqua, 'latest seeded run');
     addMetricCard(slide, 9.95, 3.55, 1.3, 1.45, '+1,800', 'lb served', C.coral, 'vs baseline');
     addMetricCard(slide, 11.45, 3.55, 1.3, 1.45, '0', 'violations', C.aqua, 'hard constraints');
     addPill(slide, 'LIVE DEMO', 8.45, 5.55, 1.1, C.coral);
@@ -411,17 +411,17 @@ async function build() {
     });
 
     addMetricCard(slide, 8.32, 2.42, 2.02, 1.15, '86.1%', 'worst pantry fill', C.teal, 'from 64.3%');
-    addMetricCard(slide, 10.58, 2.42, 2.02, 1.15, '0', 'boxes disrupted', C.teal, 'from 180');
+    addMetricCard(slide, 10.58, 2.42, 2.02, 1.15, '68', 'boxes disrupted', C.teal, 'from 248');
     addMetricCard(slide, 8.32, 3.83, 2.02, 1.15, '$990', 'procurement cost', C.amber, 'recommended plan');
     addMetricCard(slide, 10.58, 3.83, 2.02, 1.15, '7+', 'produce days', C.teal, 'from 4.8');
     addMetricCard(slide, 8.32, 5.24, 2.02, 1.15, '0', 'hard violations', C.teal, 'approval gate');
-    addMetricCard(slide, 10.58, 5.24, 2.02, 1.15, '0.81s', 'planning time', C.teal, 'latest seeded run');
+    addMetricCard(slide, 10.58, 5.24, 2.02, 1.15, '1.20s', 'planning time', C.teal, 'latest seeded run');
 
     addSourceFooter(slide, [
       { label: 'Deterministic demo runner', url: `${repoUrl}/blob/main/foodshock/demo.py` },
       { label: 'Scenario database', url: `${repoUrl}/tree/main/data` },
     ], 'Measured locally on the synthetic scenario. No comparison to the hypothetical 2.0 staff-hour task model is claimed.');
-    addNotes(slide, 'The recommended plan adds 1,800 pounds served, cuts unmet demand by the same amount, raises the worst pantry fill rate by 21.8 percentage points, and eliminates 180 disrupted boxes for 990 dollars. The runtime is a measured software run; the manual-time comparator remains hypothetical and is intentionally excluded from the chart.');
+    addNotes(slide, 'The recommended plan adds 1,800 pounds served, cuts unmet demand by the same amount, raises the worst pantry fill rate by 21.8 percentage points, and cuts disrupted boxes from 248 to 68 for 990 dollars. The runtime is a measured software run; the manual-time comparator remains hypothetical and is intentionally excluded from the chart.');
   }
 
   // 7 — Human approval
@@ -465,10 +465,10 @@ async function build() {
         x: 0.72, fill: C.mist, line: C.teal, tag: 'MEASURED', tagColor: C.teal,
         title: 'In the synthetic demo',
         items: [
-          ['0.81s', 'latest seeded run'],
+          ['1.20s', 'latest seeded run'],
           ['0', 'hard-constraint violations'],
           ['+1,800 lb', 'served vs baseline'],
-          ['8 tests', 'new safety regressions'],
+          ['64 tests', 'deterministic regression suite'],
         ],
       },
       {

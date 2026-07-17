@@ -51,6 +51,65 @@ def _product_match(ext_products: list[str], product_name: str) -> str | None:
             return cand
     return None
 
+def incident_focus(conn: sqlite3.Connection, event_id: str | None = None) -> dict:
+    """Return the product category most strongly connected to one incident."""
+    if event_id is None:
+        found = rows(
+            conn,
+            "SELECT event_id FROM recall_events WHERE status='active' "
+            "ORDER BY ingested_at DESC, rowid DESC LIMIT 1",
+        )
+        event_id = found[0]["event_id"] if found else None
+    if event_id is None:
+        return {"category": "supply", "products": [], "hazard": None}
+
+    event = rows(conn, "SELECT extraction_json FROM recall_events WHERE event_id=?",
+                 (event_id,))
+    extraction = (
+        RecallExtraction.model_validate_json(event[0]["extraction_json"])
+        if event and event[0]["extraction_json"]
+        else None
+    )
+    linked = rows(conn, """
+        SELECT pr.category, pr.name product_name, m.state
+        FROM matches m
+        JOIN inventory_lots l
+          ON m.target_type='lot' AND m.target_id=l.lot_id
+        JOIN products pr ON pr.product_id=l.product_id
+        WHERE m.event_id=? AND m.state!='not_matched'
+        UNION ALL
+        SELECT pr.category, pr.name product_name, m.state
+        FROM matches m
+        JOIN purchase_orders po
+          ON m.target_type='po' AND m.target_id=po.po_id
+        JOIN products pr ON pr.product_id=po.product_id
+        WHERE m.event_id=? AND m.state!='not_matched'
+    """, (event_id, event_id))
+    if linked:
+        weights = {"confirmed": 4, "probable": 3, "possible": 2, "unknown": 1}
+        scores: dict[str, int] = {}
+        for item in linked:
+            scores[item["category"]] = (
+                scores.get(item["category"], 0) + weights.get(item["state"], 0)
+            )
+        category = max(sorted(scores), key=lambda value: scores[value])
+        products = sorted({
+            item["product_name"] for item in linked if item["category"] == category
+        })
+    elif extraction is not None:
+        catalog = rows(conn, "SELECT name, category FROM products")
+        hits = [item for item in catalog
+                if _product_match(extraction.products, item["name"])]
+        category = hits[0]["category"] if hits else "supply"
+        products = sorted({item["name"] for item in hits})
+    else:
+        category, products = "supply", []
+    return {
+        "category": category,
+        "products": products,
+        "hazard": extraction.pathogen if extraction is not None else None,
+    }
+
 
 def _parse_date(ts: str) -> date:
     return date.fromisoformat(ts[:10])
@@ -488,14 +547,17 @@ def _write_plan(conn, kind: str, method: str, buys: dict, allocs: dict,
     insert(conn, "plans", {"plan_id": plan_id, "created_at": now_iso(), "kind": kind,
                            "method": method, "objective_json": json.dumps(OBJECTIVE_WEIGHTS),
                            "status": "draft"})
-    sub_notes = {(s["product_id"], s["substitute_product_id"]): s["note"]
-                 for s in rows(conn, "SELECT * FROM substitutions")}
+    sub_notes: dict[str, list[str]] = {}
+    for substitution in rows(conn, "SELECT * FROM substitutions"):
+        sub_notes.setdefault(substitution["substitute_product_id"], []).append(
+            substitution["note"]
+        )
     offer_by_id = {o["offer_id"]: o for o in offers}
     for offer_id, qty in sorted(buys.items()):
         if qty <= 0.5:
             continue
         o = offer_by_id[offer_id]
-        note = sub_notes.get(("PROD-ONION-Y", o["product_id"]))
+        note = " · ".join(sorted(set(sub_notes.get(o["product_id"], []))))
         insert(conn, "plan_lines", {"plan_id": plan_id, "action": "purchase",
                                     "product_id": o["product_id"], "from_id": offer_id,
                                     "to_id": o["receiving_warehouse_id"],
@@ -618,36 +680,69 @@ def build_plans(conn: sqlite3.Connection, budget: float = BUDGET_USD) -> tuple[s
         arrivals = dict(buckets)
         buys = {}
         spend = 0.0
-        daily_produce = sum(d7 for (_, c), d7 in demand7.items() if c == "produce") / HORIZON_DAYS
-        # Per-day produce headroom still fillable; existing buckets consume
-        # headroom only within their usability window, so each purchase is
-        # capped by demand it can actually reach on/after its lead time.
-        headroom = {d: daily_produce for d in range(HORIZON_DAYS)}
+        daily_by_category: dict[str, float] = {}
+        for (_, category), demand_lb in demand7.items():
+            daily_by_category[category] = (
+                daily_by_category.get(category, 0.0)
+                + demand_lb / HORIZON_DAYS
+            )
+        # Per-day category headroom still fillable. Existing buckets consume
+        # only their own category's headroom within their usability window,
+        # so each offer is capped by matching demand it can reach on/after
+        # its lead time.
+        headroom = {
+            category: {day: daily_lb for day in range(HORIZON_DAYS)}
+            for category, daily_lb in daily_by_category.items()
+        }
 
-        def _consume(first: int, last: int, qty: float) -> None:
-            for d in range(first, min(last, HORIZON_DAYS - 1) + 1):
-                take = min(qty, headroom[d])
-                headroom[d] -= take
+        def _consume(category: str, first: int, last: int, qty: float) -> None:
+            category_headroom = headroom.get(category)
+            if category_headroom is None:
+                return
+            for day in range(first, min(last, HORIZON_DAYS - 1) + 1):
+                take = min(qty, category_headroom[day])
+                category_headroom[day] -= take
                 qty -= take
                 if qty <= 0:
                     return
 
-        for (wh, i, a, e), qty in sorted(arrivals.items(), key=lambda kv: (kv[0][2], kv[0])):
-            if products[i]["category"] == "produce":
-                _consume(a, e, qty)
-        for o in sorted(offers, key=lambda o: (o["unit_cost_per_lb"], o["offer_id"])):
-            if products[o["product_id"]]["category"] != "produce":
+        for (wh, product_id, arrival, expiry), qty in sorted(
+            arrivals.items(), key=lambda item: (item[0][2], item[0])
+        ):
+            _consume(products[product_id]["category"], arrival, expiry, qty)
+        for offer in sorted(
+            offers, key=lambda item: (item["unit_cost_per_lb"], item["offer_id"])
+        ):
+            category = products[offer["product_id"]]["category"]
+            category_headroom = headroom.get(category)
+            if category_headroom is None:
                 continue
-            cap = sum(headroom[d] for d in range(o["lead_time_days"], HORIZON_DAYS))
-            qty = min(o["available_lb"], cap, (budget - spend) / o["unit_cost_per_lb"])
+            cap = sum(
+                category_headroom[day]
+                for day in range(offer["lead_time_days"], HORIZON_DAYS)
+            )
+            qty = min(
+                offer["available_lb"],
+                cap,
+                (budget - spend) / offer["unit_cost_per_lb"],
+            )
             if qty <= 0.5:
                 continue
-            buys[o["offer_id"]] = qty
-            key = (o["receiving_warehouse_id"], o["product_id"], o["lead_time_days"],
-                   min(_offer_expiry(o, products), HORIZON_DAYS - 1))
+            buys[offer["offer_id"]] = qty
+            key = (
+                offer["receiving_warehouse_id"],
+                offer["product_id"],
+                offer["lead_time_days"],
+                min(_offer_expiry(offer, products), HORIZON_DAYS - 1),
+            )
             arrivals[key] = arrivals.get(key, 0.0) + qty
-            spend += qty * o["unit_cost_per_lb"]
-            _consume(o["lead_time_days"], HORIZON_DAYS - 1, qty)
+            spend += qty * offer["unit_cost_per_lb"]
+            _consume(
+                category,
+                offer["lead_time_days"],
+                HORIZON_DAYS - 1,
+                qty,
+            )
         allocs, xfers = _greedy_alloc(pantries, demand7, products, arrivals, serving)
         rec_id = _write_plan(conn, "recommended", "greedy-fallback", buys, allocs, xfers,
                              products, offers, serving)
@@ -951,7 +1046,6 @@ def evaluate_plan(conn: sqlite3.Connection, plan_id: str) -> PlanMetrics:
         violations += 1
 
     unmet_total = 0.0
-    unmet_produce = 0.0
     worst = 1.0
     for p in pantries:
         d_total = s_total = 0.0
@@ -961,8 +1055,6 @@ def evaluate_plan(conn: sqlite3.Connection, plan_id: str) -> PlanMetrics:
             for d in range(HORIZON_DAYS):
                 s = min(served_day.get((pid, c, d), 0.0), dd)
                 unmet_total += max(0.0, dd - s)
-                if c == "produce":
-                    unmet_produce += max(0.0, dd - s)
                 d_total += dd
                 s_total += s
         if d_total > 0:
@@ -979,7 +1071,7 @@ def evaluate_plan(conn: sqlite3.Connection, plan_id: str) -> PlanMetrics:
     metrics = PlanMetrics(served_lb=round(served_total, 1), unmet_demand_lb=round(unmet_total, 1),
                           worst_pantry_fulfillment=round(worst, 3), procurement_cost=round(cost, 2),
                           spoilage_lb=round(spoilage, 1),
-                          boxes_disrupted=int(round(unmet_produce / BOX_LB)),
+                          boxes_disrupted=int(round(unmet_total / BOX_LB)),
                           hard_constraint_violations=violations)
     conn.execute("UPDATE plans SET metrics_json=? WHERE plan_id=?", (metrics.model_dump_json(), plan_id))
     conn.commit()
@@ -1088,7 +1180,18 @@ def draft_communications(conn: sqlite3.Connection, plan_id: str, *,
     products = {p["product_id"]: p for p in rows(conn, "SELECT * FROM products")}
     suppliers = {s["supplier_id"]: s for s in rows(conn, "SELECT * FROM suppliers")}
     offers = {o["offer_id"]: o for o in rows(conn, "SELECT * FROM replacement_offers")}
+    warehouses = {w["warehouse_id"]: w for w in rows(conn, "SELECT * FROM warehouses")}
+    focus = incident_focus(conn)
+    focus_category = focus["category"].replace("_", " ")
+    focus_products = ", ".join(focus["products"]) or "implicated product"
     purchases = rows(conn, "SELECT * FROM plan_lines WHERE plan_id=? AND action='purchase'", (plan_id,))
+    transfers = rows(
+        conn,
+        "SELECT product_id, from_id, to_id, SUM(quantity_lb) quantity_lb "
+        "FROM plan_lines WHERE plan_id=? AND action='transfer' "
+        "GROUP BY product_id, from_id, to_id ORDER BY product_id, from_id, to_id",
+        (plan_id,),
+    )
     quarantined = rows(conn, "SELECT * FROM inventory_lots "
                              "WHERE status IN ('quarantine_proposed','quarantined') "
                              "ORDER BY lot_id")
@@ -1100,25 +1203,35 @@ def draft_communications(conn: sqlite3.Connection, plan_id: str, *,
 
     out = []
 
-    arriving = "\n".join(
-        f"- {ln['quantity_lb']:.0f} lb {products[ln['product_id']]['name']} "
+    purchase_actions = [
+        f"- Purchase {ln['quantity_lb']:.0f} lb {products[ln['product_id']]['name']} "
         f"(arrives in {offers[ln['from_id']]['lead_time_days']} day(s))"
-        for ln in purchases) or "- none"
+        for ln in purchases
+    ]
+    transfer_actions = [
+        f"- Reroute {ln['quantity_lb']:.0f} lb {products[ln['product_id']]['name']} "
+        f"from {warehouses[ln['from_id']]['name']} to {warehouses[ln['to_id']]['name']}"
+        for ln in transfers
+    ]
+    recovery_actions = "\n".join(purchase_actions + transfer_actions)
+    if not recovery_actions:
+        recovery_actions = "- Reallocate verified safe on-hand and inbound supply"
     held_ids = ", ".join(l["lot_id"] for l in quarantined)
     hold_instruction = (
         f"Do not distribute the listed implicated lot(s) pending recall disposition or "
-        f"review: {held_ids}. This instruction does not apply to other onion products or "
-        "lots."
+        f"review: {held_ids}. This hold is limited to evidence-linked {focus_products} "
+        f"lots; it does not place other {focus_category} products on hold."
         if held_ids else
         "No inventory lot is placed on hold by this message."
     )
     out.append({
         "audience": "pantry_coordinators",
-        "subject": "Recall impact: onion distributions affected; substitutions incoming",
-        "body": (f"A supplier recall has made {infeasible['c']} planned distribution line(s) "
-                 f"({infeasible['lb']:.0f} lb) infeasible. Replacement product on the approved plan:\n"
-                 f"{arriving}\n\nAllocations by pantry are listed in the approved plan. "
-                 f"{hold_instruction}"),
+        "subject": f"Recall impact: {focus_products} distribution response",
+        "body": (f"A supplier recall affecting {focus_products} has made "
+                 f"{infeasible['c']} planned distribution line(s) "
+                 f"({infeasible['lb']:.0f} lb) infeasible. Approved recovery actions:\n"
+                 f"{recovery_actions}\n\nAllocations by pantry are listed in the approved "
+                 f"plan. {hold_instruction}"),
     })
     for ln in purchases:
         o = offers[ln["from_id"]]
@@ -1158,14 +1271,18 @@ def draft_communications(conn: sqlite3.Connection, plan_id: str, *,
 # ------------------------------------------------------------ reporting
 
 def before_after(conn: sqlite3.Connection, baseline_id: str, recommended_id: str,
-                 runtime_s: float | None = None) -> dict:
+                 focus_category: str, runtime_s: float | None = None) -> dict:
     plans = {p["plan_id"]: p for p in rows(conn, "SELECT * FROM plans WHERE plan_id IN (?,?)",
                                            (baseline_id, recommended_id))}
     base = json.loads(plans[baseline_id]["metrics_json"])
     rec = json.loads(plans[recommended_id]["metrics_json"])
     dos_before = days_of_supply(project_supply(conn, "conservative"))
     dos_after = days_of_supply(project_supply(conn, "conservative", plan_id=recommended_id))
-    return {"baseline": base, "recommended": rec,
-            "produce_dos_conservative_before": dos_before.get("produce"),
-            "produce_dos_conservative_after": dos_after.get("produce"),
-            "runtime_s": runtime_s}
+    return {
+        "baseline": base,
+        "recommended": rec,
+        "focus_category": focus_category,
+        "focus_dos_conservative_before": dos_before.get(focus_category),
+        "focus_dos_conservative_after": dos_after.get(focus_category),
+        "runtime_s": runtime_s,
+    }

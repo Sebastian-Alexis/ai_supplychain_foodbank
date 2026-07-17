@@ -11,6 +11,7 @@ the operator (engine.approve_plan is the human's action, not ours).
 """
 
 from __future__ import annotations
+from collections.abc import Callable
 
 import json
 import sqlite3
@@ -22,7 +23,7 @@ import pandas as pd
 
 from .db import insert, now_iso, rows
 from .engine import (before_after, build_plans, days_of_supply,
-                     project_supply, propagate, resolve_event)
+                     incident_focus, project_supply, propagate, resolve_event)
 from .extraction import ExtractionUnavailable, extract_notice
 from .narrate import narrate
 from .schemas import SCENARIOS, RecallExtraction
@@ -53,13 +54,16 @@ class RecallResponseAgent:
     """Drives one recall incident end to end and logs the transcript."""
 
     def __init__(self, conn: sqlite3.Connection, *, allow_llm: bool = True,
-                 actor: str = "recall-response-agent"):
+                 actor: str = "recall-response-agent",
+                 on_event: Callable[[dict], None] | None = None):
         self.conn = conn
         self.allow_llm = allow_llm
         self.actor = actor
+        self.on_event = on_event
         self._seq = 0
         self.run_id = ""
         self.gaps: list[str] = []
+        self._observer_s = 0.0
 
     # ------------------------------------------------------------ logging
 
@@ -70,6 +74,16 @@ class RecallResponseAgent:
             "phase": phase, "kind": kind, "name": name,
             "content_json": json.dumps(content, default=str)})
         self.conn.commit()
+        if self.on_event is not None:
+            observer_started = time.perf_counter()
+            self.on_event({
+                "run_id": self.run_id,
+                "seq": self._seq,
+                "phase": phase,
+                "kind": kind,
+                "name": name,
+            })
+            self._observer_s += time.perf_counter() - observer_started
 
     def _tool(self, phase: str, name: str, args: dict, fn):
         """Log call, execute, log compacted result, return the full result."""
@@ -94,6 +108,7 @@ class RecallResponseAgent:
             event_id: str | None = None) -> AgentRunResult:
         t0 = time.perf_counter()
         self.gaps: list[str] = []
+        self._observer_s = 0.0
         event_id = event_id or f"EV-{uuid.uuid4().hex[:8].upper()}"
         self.run_id = f"RUN-{event_id}"
 
@@ -161,6 +176,7 @@ class RecallResponseAgent:
                 self._gap("investigate",
                           f"{m['target_type']} {m['target_id']}: {m['state']} match "
                           f"(tier {m['tier']}) needs human review before any release.")
+        focus = incident_focus(self.conn, event_id)
 
         propagation = self._tool("investigate", "propagate", {"event_id": event_id},
                                  lambda: propagate(self.conn, event_id))
@@ -175,14 +191,17 @@ class RecallResponseAgent:
         baseline_id, rec_id = self._tool("explain", "optimize_recovery",
                                          {"objective": "weighted LP, conservative pool"},
                                          lambda: build_plans(self.conn))
-        runtime_s = round(time.perf_counter() - t0, 2)
+        runtime_s = round(max(0.0, time.perf_counter() - t0 - self._observer_s), 2)
         ba = self._tool("explain", "before_after",
-                        {"baseline": baseline_id, "recommended": rec_id},
-                        lambda: before_after(self.conn, baseline_id, rec_id, runtime_s=runtime_s))
+                        {"baseline": baseline_id, "recommended": rec_id,
+                         "focus_category": focus["category"]},
+                        lambda: before_after(self.conn, baseline_id, rec_id,
+                                             focus_category=focus["category"],
+                                             runtime_s=runtime_s))
 
         facts = {
             "event_id": event_id, "authority": extraction.authority,
-            "pathogen": extraction.pathogen,
+            "hazard": extraction.pathogen,
             "recalled_products": extraction.products,
             "match_counts (lots and purchase orders, by state)": match_counts,
             "confirmed_quarantine_proposed_lb": propagation["quarantine_proposed_lb"],
@@ -190,10 +209,15 @@ class RecallResponseAgent:
             "purchase_orders_flagged_at_risk": propagation["pos_at_risk"],
             "infeasible_distribution_lines (conservative pool, all active recalls)":
                 propagation["infeasible_lines"],
-            "produce_days_of_supply": {
-                "conservative_assumption_before_plan": ba["produce_dos_conservative_before"],
-                "conservative_assumption_after_plan": ba["produce_dos_conservative_after"],
-                "optimistic_assumption": dos["optimistic"].get("produce"),
+            "focus_supply": {
+                "category": focus["category"],
+                "products": focus["products"],
+                "conservative_assumption_before_plan":
+                    ba["focus_dos_conservative_before"],
+                "conservative_assumption_after_plan":
+                    ba["focus_dos_conservative_after"],
+                "optimistic_assumption":
+                    dos["optimistic"].get(focus["category"]),
             },
             "do_nothing_baseline": ba["baseline"],
             "recommended_plan": ba["recommended"],
@@ -240,7 +264,8 @@ def _head_word(name: str) -> str:
 
 def _explain_template(facts: dict) -> str:
     mc = facts["match_counts (lots and purchase orders, by state)"]
-    dos = facts["produce_days_of_supply"]
+    dos = facts["focus_supply"]
+    category_label = dos["category"].replace("_", " ").title()
     rec, base = facts["recommended_plan"], facts["do_nothing_baseline"]
 
     def fmt_dos(v):
@@ -248,7 +273,7 @@ def _explain_template(facts: dict) -> str:
 
     return (
         f"{facts['authority']} recall {facts['event_id']}"
-        f"{' (' + facts['pathogen'] + ')' if facts['pathogen'] else ''}: "
+        f"{' (' + facts['hazard'] + ')' if facts['hazard'] else ''}: "
         f"{mc.get('confirmed', 0)} confirmed, {mc.get('probable', 0)} probable, and "
         f"{mc.get('possible', 0)} possible matches across lots and inbound orders; "
         f"{facts['confirmed_quarantine_proposed_lb']:g} lb proposed for quarantine and "
@@ -256,7 +281,7 @@ def _explain_template(facts: dict) -> str:
         f"{facts['purchase_orders_flagged_at_risk']} purchase order(s) flagged at risk; "
         f"{facts['infeasible_distribution_lines (conservative pool, all active recalls)']} "
         f"planned distribution line(s) infeasible against the conservative pool. "
-        f"Produce days of supply under the conservative assumption: "
+        f"{category_label} days of supply under the conservative assumption: "
         f"{fmt_dos(dos['conservative_assumption_before_plan'])} without action, "
         f"{fmt_dos(dos['conservative_assumption_after_plan'])} with the recommended plan "
         f"(optimistic assumption: {fmt_dos(dos['optimistic_assumption'])}). "
