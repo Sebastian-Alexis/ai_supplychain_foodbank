@@ -155,20 +155,35 @@ def _inject_theme() -> None:
           padding: 0.8rem 0.95rem;
         }
         [data-testid="stMetricValue"] { color: var(--fs-ink); font-weight: 800; }
-        .stButton > button[kind="primary"] {
+        [data-testid="stButton"] button[kind="primary"] {
           background: var(--fs-coral);
           border-color: var(--fs-coral);
-          color: white;
+          color: #fffdf8;
           font-weight: 750;
         }
-        .stButton > button { border-radius: 2px; font-weight: 700; }
-        [data-testid="stSidebar"] .stButton > button {
-          background: #fffdf8;
-          border-color: #fffdf8;
-          color: var(--fs-ink);
+        [data-testid="stButton"] button { border-radius: 2px; font-weight: 700; }
+        [data-testid="stSidebar"] [data-testid="stButton"] button {
+          background: var(--fs-coral) !important;
+          border: 1px solid var(--fs-coral) !important;
+          color: #fffdf8 !important;
         }
-        [data-testid="stSidebar"] .stButton > button p {
-          color: var(--fs-ink);
+        [data-testid="stSidebar"] [data-testid="stButton"] button p,
+        [data-testid="stSidebar"] [data-testid="stButton"] button span {
+          color: #fffdf8 !important;
+        }
+        [data-testid="stSidebar"] [data-testid="stButton"] button:hover,
+        [data-testid="stSidebar"] [data-testid="stButton"] button:focus-visible {
+          background: #8f3427 !important;
+          border-color: #8f3427 !important;
+          color: #fffdf8 !important;
+        }
+        [data-testid="stSidebar"] [data-testid="stButton"] button:hover p,
+        [data-testid="stSidebar"] [data-testid="stButton"] button:focus-visible p {
+          color: #fffdf8 !important;
+        }
+        [data-testid="stSidebar"] [data-testid="stButton"] button:focus-visible {
+          outline: 3px solid #d5bd7b;
+          outline-offset: 2px;
         }
         [data-baseweb="tab-list"] {
           gap: 0.35rem;
@@ -731,15 +746,25 @@ def main() -> None:
             st.rerun()
         st.stop()
 
-    if st.sidebar.button("Replay recall incident",
-                         help="Reset the scenario and run the canned notice through the agent"):
+    if st.sidebar.button(
+        "Replay recall incident",
+        type="primary",
+        help="Reset the scenario and run the canned notice through the agent",
+    ):
         with st.spinner("Resetting scenario and running RecallResponseAgent..."):
             try:
                 _replay_incident(conn)
             except ExtractionUnavailable as exc:
                 st.error(f"Extraction unavailable: {exc}")
                 st.stop()
+        st.session_state.replay_count = st.session_state.get("replay_count", 0) + 1
         st.rerun()
+
+    replay_count = st.session_state.get("replay_count", 0)
+    if replay_count:
+        st.sidebar.success(
+            f"Replay {replay_count} complete. Scenario reset and recovery plan regenerated."
+        )
 
     event_id = latest_event_id(conn)
     events = [r["event_id"] for r in rows(conn, "SELECT event_id FROM recall_events "
