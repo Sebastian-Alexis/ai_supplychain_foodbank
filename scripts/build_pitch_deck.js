@@ -489,7 +489,7 @@ async function build() {
         title: 'Implemented + measured',
         items: [
           ['2 feeds', 'on-demand openFDA + FSIS'],
-          ['99 tests', 'deterministic regression suite'],
+          ['101 tests', 'deterministic regression suite'],
           ['0', 'hard-constraint violations'],
           ['+1,000 lb', 'curated recovery vs baseline'],
         ],

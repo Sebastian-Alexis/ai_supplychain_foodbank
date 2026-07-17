@@ -77,7 +77,7 @@ def _legacy_key(raw_text: str) -> str:
 def _key(raw_text: str, *, cache_identity: str | None = None) -> str:
     """Hash the complete effective extraction contract and stable input."""
     contract = {
-        "namespace": "recall-extraction-v1",
+        "namespace": "recall-extraction-v2",
         "model": LIVE_MODEL,
         "prompt": _LIVE_PROMPT,
         "schema": RecallExtraction.model_json_schema(),
@@ -103,7 +103,7 @@ def _cache_layers(cache_path: Path | None) -> tuple[Path, ...]:
 
 
 def _store_cache(path: Path, key: str, extraction: RecallExtraction) -> None:
-    """Merge and atomically persist one verified response."""
+    """Merge and atomically persist one schema-valid, untrusted response."""
     with _CACHE_LOCK:
         try:
             cache = _load_cache(path)
@@ -195,15 +195,15 @@ def extract_notice(
 
     if allow_llm and os.environ.get("ANTHROPIC_API_KEY"):
         try:
-            extraction = _live_extract(raw_text)
+            raw_extraction = _live_extract(raw_text)
         except Exception as exc:
             raise ExtractionUnavailable(
                 "Claude extraction failed; deterministic source mapping remains available."
             ) from exc
-        extraction, dropped = verify_provenance(extraction, raw_text)
+        extraction, dropped = verify_provenance(raw_extraction, raw_text)
         write_path = cache_path or RUNTIME_CACHE_PATH
         try:
-            _store_cache(write_path, contract_key, extraction)
+            _store_cache(write_path, contract_key, raw_extraction)
         except OSError:
             pass
         return extraction, "live-llm", dropped
@@ -287,7 +287,13 @@ def enrich_source_extraction(
     contributed = any(
         getattr(merged, field) not in (None, [], "") for field in filled
     )
-    dropped = list(dict.fromkeys(base_dropped + candidate_dropped + merge_dropped))
+    relevant_candidate_dropped = [
+        field for field in candidate_dropped
+        if getattr(verified_base, field, None) in (None, [], "")
+    ]
+    dropped = list(
+        dict.fromkeys(base_dropped + relevant_candidate_dropped + merge_dropped)
+    )
     return merged, method if contributed else None, dropped
 
 
