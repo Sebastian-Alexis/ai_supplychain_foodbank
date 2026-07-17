@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 
 from .db import DATA_DIR, insert
+from .datagen import TODAY
+from .schemas import RecallExtraction
 
 
 @dataclass(frozen=True)
@@ -130,3 +133,188 @@ def prepare_demo_incident(conn: sqlite3.Connection, incident: DemoIncident) -> N
         raise ValueError(f"unknown demo incident: {incident.key}")
 
     conn.commit()
+
+
+LIVE_SAMPLE_PREFIX = "SYN-LIVE-"
+LIVE_SAMPLE_SUPPLIER_ID = f"{LIVE_SAMPLE_PREFIX}SUPPLIER"
+LIVE_SAMPLE_FACILITY_ID = f"{LIVE_SAMPLE_PREFIX}FACILITY"
+LIVE_SAMPLE_PRODUCT_ID = f"{LIVE_SAMPLE_PREFIX}PRODUCT"
+LIVE_SAMPLE_LOT_ID = f"{LIVE_SAMPLE_PREFIX}LOT"
+LIVE_SAMPLE_PO_ID = f"{LIVE_SAMPLE_PREFIX}PO"
+LIVE_SAMPLE_DIST_ID = f"{LIVE_SAMPLE_PREFIX}DIST"
+
+
+def _sample_product_profile(product_name: str) -> tuple[str, str, int]:
+    """Assign plausible attributes to a clearly synthetic operational sample."""
+    name = product_name.lower()
+    if any(word in name for word in (
+        "beef", "chicken", "poultry", "pork", "turkey", "meat", "sausage",
+        "ham", "fish", "seafood", "shrimp", "tuna", "egg", "nugget",
+    )):
+        category, temperature_zone, shelf_life_days = "protein", "refrigerated", 14
+    elif any(word in name for word in (
+        "milk", "cheese", "yogurt", "cream", "butter",
+    )):
+        category, temperature_zone, shelf_life_days = "dairy", "refrigerated", 14
+    elif any(word in name for word in (
+        "rice", "pasta", "bread", "flour", "grain", "cereal", "tortilla",
+        "noodle",
+    )):
+        category, temperature_zone, shelf_life_days = "grain", "ambient", 180
+    elif any(word in name for word in (
+        "produce", "vegetable", "fruit", "onion", "potato", "lettuce",
+        "spinach", "tomato", "pepper", "cucumber", "melon", "apple",
+        "peach", "berry", "mango", "avocado", "sprout", "salad",
+    )):
+        category, temperature_zone, shelf_life_days = "produce", "refrigerated", 21
+    else:
+        category, temperature_zone, shelf_life_days = "shelf_stable", "ambient", 90
+    if "frozen" in name:
+        temperature_zone = "frozen"
+        shelf_life_days = max(shelf_life_days, 180)
+    return category, temperature_zone, shelf_life_days
+
+
+def _iso_timestamp(value: date) -> str:
+    return f"{value.isoformat()}T12:00:00+00:00"
+
+
+def _paired_sample_product(
+    extraction: RecallExtraction,
+) -> tuple[str, str | None, str | None]:
+    """Keep flattened identifiers only when the product text binds them."""
+    for product_name in extraction.products:
+        folded_product = product_name.casefold()
+        product_digits = "".join(char for char in product_name if char.isdigit())
+        lot_code = next(
+            (
+                value for value in extraction.lot_codes
+                if len(value) >= 4 and value.casefold() in folded_product
+            ),
+            None,
+        )
+        upc = next(
+            (
+                value for value in extraction.upcs
+                if len(digits := "".join(char for char in value if char.isdigit())) >= 8
+                and digits in product_digits
+            ),
+            None,
+        )
+        if lot_code or upc:
+            return product_name, upc, lot_code
+    return extraction.products[0], None, None
+
+
+def prepare_live_incident_overlay(
+    conn: sqlite3.Connection,
+    extraction: RecallExtraction,
+) -> dict[str, str] | None:
+    """Add one incident-linked, unmistakably synthetic trace sample.
+
+    The overlay copies only authority identifiers already present in the
+    extraction. It creates no claim about the food bank's real inventory:
+    every operational identifier carries the ``SYN-LIVE-`` prefix, and the UI
+    labels the resulting match as a demonstration. If the authority record has
+    too little identifying evidence to exercise a matching tier, nothing is
+    inserted and the honest result remains zero exposure.
+    """
+    if not extraction.products:
+        return None
+    supplier_name = extraction.supplier_names[0] if extraction.supplier_names else ""
+    facility_name = extraction.facility_names[0] if extraction.facility_names else ""
+    product_name, upc, lot_code = _paired_sample_product(extraction)
+    if not any((supplier_name, facility_name, upc, lot_code)):
+        return None
+    category, temperature_zone, shelf_life_days = _sample_product_profile(product_name)
+    operational_date = (
+        extraction.production_date_end
+        or extraction.production_date_start
+        or TODAY
+    )
+    expiry_date = max(operational_date + timedelta(days=shelf_life_days),
+                      TODAY + timedelta(days=30))
+
+    insert(conn, "suppliers", {
+        "supplier_id": LIVE_SAMPLE_SUPPLIER_ID,
+        "name": (
+            f"Synthetic sample · {supplier_name}"
+            if supplier_name else "Synthetic sample · supplier not stated"
+        ),
+        "city": "Demo record",
+        "state": "CA",
+    })
+    if supplier_name:
+        insert(conn, "supplier_aliases", {
+            "supplier_id": LIVE_SAMPLE_SUPPLIER_ID,
+            "alias": supplier_name,
+        })
+
+    facility_id = None
+    if facility_name:
+        facility_id = LIVE_SAMPLE_FACILITY_ID
+        insert(conn, "facilities", {
+            "facility_id": facility_id,
+            "supplier_id": LIVE_SAMPLE_SUPPLIER_ID,
+            "name": facility_name,
+            "city": "Demo record",
+            "state": "CA",
+        })
+
+    insert(conn, "products", {
+        "product_id": LIVE_SAMPLE_PRODUCT_ID,
+        "name": product_name,
+        "category": category,
+        "allergens": "",
+        "upc": upc,
+        "unit_cost_per_lb": 1.0,
+        "temperature_zone": temperature_zone,
+        "shelf_life_days": shelf_life_days,
+    })
+    insert(conn, "inventory_lots", {
+        "lot_id": LIVE_SAMPLE_LOT_ID,
+        "product_id": LIVE_SAMPLE_PRODUCT_ID,
+        "supplier_id": LIVE_SAMPLE_SUPPLIER_ID,
+        "facility_id": facility_id,
+        "supplier_lot_code": lot_code,
+        "quantity_lb": 240.0,
+        "received_at": _iso_timestamp(operational_date),
+        "expires_at": _iso_timestamp(expiry_date),
+        "warehouse_id": "WH-OAK",
+        "status": "available",
+    })
+    insert(conn, "purchase_orders", {
+        "po_id": LIVE_SAMPLE_PO_ID,
+        "supplier_id": LIVE_SAMPLE_SUPPLIER_ID,
+        "product_id": LIVE_SAMPLE_PRODUCT_ID,
+        "quantity_lb": 360.0,
+        "unit_cost_per_lb": 1.0,
+        "ordered_at": _iso_timestamp(operational_date - timedelta(days=1)),
+        "expected_delivery": operational_date.isoformat(),
+        "warehouse_id": "WH-OAK",
+        "status": "open",
+    })
+    insert(conn, "distribution_plans", {
+        "dist_id": LIVE_SAMPLE_DIST_ID,
+        "pantry_id": "P-FRU",
+        "warehouse_id": "WH-OAK",
+        "product_id": LIVE_SAMPLE_PRODUCT_ID,
+        "quantity_lb": 50.0,
+        "scheduled_date": (TODAY + timedelta(days=1)).isoformat(),
+        "status": "planned",
+    })
+    conn.commit()
+
+    if lot_code:
+        basis = "authority lot code"
+    elif upc:
+        basis = "authority UPC"
+    elif supplier_name:
+        basis = "authority supplier alias and product"
+    else:
+        basis = "authority facility and product"
+    return {
+        "basis": basis,
+        "lot_id": LIVE_SAMPLE_LOT_ID,
+        "po_id": LIVE_SAMPLE_PO_ID,
+    }

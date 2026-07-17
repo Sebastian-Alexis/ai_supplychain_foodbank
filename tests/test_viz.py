@@ -17,7 +17,17 @@ from __future__ import annotations
 import networkx as nx
 
 from foodshock.db import insert, now_iso, rows
-from foodshock.viz import _COLUMN, graph_figure, lineage_graph, map_arcs, map_deck, map_points
+from foodshock.schemas import RecallExtraction
+from foodshock.viz import (
+    _COLUMN,
+    authority_graph,
+    graph_figure,
+    lineage_graph,
+    map_arcs,
+    map_deck,
+    map_points,
+    operations_context_graph,
+)
 from test_timing import _d, _mini_db
 
 
@@ -135,6 +145,81 @@ def test_same_product_plan_from_uninvolved_warehouse_stays_out():
     oak = rows(conn, "SELECT lat, lon FROM warehouses WHERE warehouse_id='WH-OAK'")[0]
     assert float(dist_arcs.iloc[0]["from_lat"]) == oak["lat"]
     assert float(dist_arcs.iloc[0]["from_lon"]) == oak["lon"]
+
+
+def test_zero_match_still_has_authority_graph():
+    conn = _mini_db()
+    long_product = (
+        "Frozen prepared food kit with multiple package sizes, case codes, "
+        "consumer instructions, and an extended authority description"
+    )
+    extraction = RecallExtraction(
+        authority="FDA",
+        products=[long_product],
+        supplier_names=["Authority Supplier"],
+        facility_names=["Authority Plant"],
+        distribution_regions=["Nationwide"],
+        pathogen="Salmonella",
+        confidence=0.99,
+    )
+    insert(conn, "recall_events", {
+        "event_id": "EV-ZERO",
+        "authority": "FDA",
+        "status": "active",
+        "ingested_at": now_iso(),
+        "raw_text": "synthetic authority snapshot",
+        "extraction_json": extraction.model_dump_json(),
+    })
+    conn.commit()
+
+    linked = lineage_graph(conn, "EV-ZERO")
+    assert set(linked.nodes) == {("event", "EV-ZERO")}
+    assert not linked.edges
+
+    authority = authority_graph(conn, "EV-ZERO")
+    event = ("event", "EV-ZERO")
+    assert authority.has_edge(
+        event, ("supplier", "authority:supplier_names:1")
+    )
+    assert authority.has_edge(
+        event, ("facility", "authority:facility_names:1")
+    )
+    assert authority.has_edge(event, ("product", "authority:products:1"))
+    assert "distribution: Nationwide" in authority.nodes[event]["detail"]
+    product_node = ("product", "authority:products:1")
+    assert len(authority.nodes[product_node]["label"]) <= 56
+    assert long_product in authority.nodes[product_node]["detail"]
+    graph_figure(authority)
+
+
+def test_operations_context_has_exact_disconnected_route_topologies():
+    conn = _mini_db(po=(500.0, 2), lots=(("L-A", 900.0, 6),))
+    insert(conn, "distribution_plans", {
+        "dist_id": "D-1",
+        "pantry_id": "P-1",
+        "warehouse_id": "WH-OAK",
+        "product_id": "PROD-X",
+        "quantity_lb": 100.0,
+        "scheduled_date": _d(1),
+    })
+    conn.commit()
+
+    context = operations_context_graph(conn)
+    receiving = ("warehouse", "receiving:WH-OAK")
+    distribution = ("warehouse", "distribution:PROD-X:WH-OAK")
+    pantry = ("pantry", "P-1")
+    assert context.has_edge(("supplier", "SUP-A"), ("lot", "L-A"))
+    assert context.has_edge(("product", "PROD-X"), ("lot", "L-A"))
+    assert context.has_edge(("lot", "L-A"), receiving)
+    assert context.has_edge(("po", "PO-T1"), receiving)
+    assert context.has_edge(("product", "PROD-X"), distribution)
+    assert context.has_edge(distribution, pantry)
+    assert not nx.has_path(context, ("lot", "L-A"), pantry)
+    assert not nx.has_path(context, ("po", "PO-T1"), pantry)
+    assert not any(node[0] == "event" for node in context)
+    assert context.nodes[("lot", "L-A")]["state"] is None
+    assert context.nodes[("po", "PO-T1")]["state"] is None
+    graph_figure(context)
 
 
 def test_map_deck_spec_offline_and_online():

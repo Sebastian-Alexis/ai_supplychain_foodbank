@@ -346,15 +346,15 @@ Five views:
 1. **Exposure queue** — confirmed / probable / possible / cleared / missing-info, each row showing evidence and source excerpt; incident facts and human confirmations fold in here (no separate timeline view).
 2. **Impact dashboard** — inventory by match state, POs at risk, days of supply under both labeled scenarios (confirmed recalls excluded from each), boxes disrupted, pantry service levels.
 3. **Recovery-plan comparison** — recommended plan vs. do-nothing, before/after metrics, approve button, audit record.
-4. **Supply-chain graph** — derived lineage from implicated supplier/facility through lots, orders, warehouses, pantries, planned distributions.
+4. **Supply-chain graph** — derived lineage from implicated supplier/facility through lots, orders, warehouses, pantries, and planned distributions; with zero matches, render authority entities beside a disconnected, product-specific synthetic network context so absence of an exposure edge stays visible.
 5. **Geographic map** — suppliers, facilities, warehouses, pantries, replacement sources, routes. Must not imply that proximity to a human infection indicates contaminated inventory.
 
 ## 14. Demonstration (3-minute arc)
 
-1. **Official alert lands** — select a current openFDA or FSIS incident; the normalized source snapshot, retrieval time, trust warning, and authority link remain visible.
-2. **Evidence join** — the agent maps cited source fields and checks exact lot and purchase-order lineage. A real incident with no linked operational record is reported as zero exposure, with no quarantine, hold, recovery plan, or communications.
-3. **Positive-exposure path** — replay the curated E. coli analogue to show the deterministic exposure queue, seven-day projection, and recommended recovery plan.
-4. **Approve only when warranted** — the operator reviews the positive-exposure plan, approves it, and receives scoped draft communications. The no-exposure path exposes no approval action.
+1. **Official alert lands** — select a current openFDA or FSIS incident; the normalized source snapshot, API-derived fields, retrieval time, trust warning, and authority link render immediately before analysis.
+2. **Choose the evidence mode** — the default, visibly disclosed trace sample copies only source-supported identifiers into `SYN-LIVE-*` synthetic records so matching and graph behavior can be inspected. Turn it off to test the authority record against the untouched seed network.
+3. **Evidence join** — the agent checks lot and purchase-order lineage. In untouched-network mode, no linked record is reported as zero exposure with no quarantine, hold, recovery action, or communications. In trace-sample mode, every positive row remains visibly synthetic and requires human review.
+4. **Approve only when warranted** — review the evidence-linked plan or use the curated E. coli analogue for the full recovery path. The no-exposure path exposes no approval action.
 
 The positive-exposure fallback is anchored to the real 2024 onion E. coli recall as an analogue (verified citation, §2). Authority incidents are real; inventory, purchase orders, demand, and every displayed operational impact remain synthetic and are labeled as such.
 
@@ -387,7 +387,7 @@ Human-factors bar (checked manually): operator can see why each lot matched, dis
 
 **Phase B — agent + extraction:**
 5. Add independently isolated openFDA and FSIS adapters with deterministic, provenance-verified source-field mapping.
-6. Wrap source intake and operational tools in the RecallResponseAgent loop; show the live transcript and honest zero-exposure path.
+6. Wrap source intake and operational tools in the RecallResponseAgent loop; show the live transcript, the honest untouched-network zero-exposure path, and a separately disclosed `SYN-LIVE-*` trace-sample path.
 7. Keep schema-validated LLM extraction with excerpts for free-form/curated notices; tiers 3–4 route ambiguous joins to `flag_gap`.
 
 **Phase C — presentation:**

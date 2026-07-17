@@ -300,6 +300,7 @@ def _normalize_openfda(payload: dict, *, limit: int,
         distributions = _unique(_clean(r.get("distribution_pattern")) for r in records)
         code_infos = _unique(_clean(r.get("code_info")) for r in records)
         upcs = _upcs_from_text(*products, *code_infos)
+        lot_codes = _lot_codes_from_text(*code_infos)
         classifications = _unique(_clean(r.get("classification")) for r in records)
         statuses = _unique(_clean(r.get("status")) for r in records)
         reports = [_clean(r.get("report_date")) for r in records]
@@ -342,14 +343,20 @@ def _normalize_openfda(payload: dict, *, limit: int,
             products=products,
             supplier_names=firms,
             upcs=upcs,
+            lot_codes=lot_codes,
             pathogen=pathogen,
+            distribution_regions=distributions,
             excerpts={
                 "products": products[0] if products else "",
                 "supplier_names": firms[0] if firms else "",
                 "upcs": _first_text_containing(
                     upcs[0], *products, *code_infos
                 ) if upcs else "",
+                "lot_codes": _first_text_containing(
+                    lot_codes[0], *code_infos
+                ) if lot_codes else "",
                 "pathogen": pathogen or "",
+                "distribution_regions": distributions[0] if distributions else "",
             },
             confidence=0.99,
         )
@@ -528,6 +535,54 @@ def _upcs_from_text(*values: str) -> list[str]:
             value,
             flags=re.IGNORECASE,
         ))
+    return _unique(out)
+
+
+def _lot_codes_from_text(*values: str) -> list[str]:
+    """Extract values only from explicit singular or plural lot clauses."""
+    out: list[str] = []
+
+    def add_candidate(token: str) -> None:
+        token = token.strip(".,;:()[]{}")
+        if "/" in token or not any(char.isdigit() for char in token):
+            return
+        out.append(token)
+
+    for value in values:
+        for header in re.finditer(
+            r"\blot\s+codes?\s*[:#-]?\s*",
+            value,
+            flags=re.IGNORECASE,
+        ):
+            clause = value[header.end():]
+            clause = re.sub(
+                r"\b(?:exp(?:iration)?\s+date|best\s+(?:if\s+)?used\s+by|"
+                r"use\s+by)\s*[:#-]?\s*(?:[A-Za-z]{3}\s+)?"
+                r"\d{1,4}(?:[/-]\d{1,4}){0,2}",
+                " ",
+                clause,
+                flags=re.IGNORECASE,
+            )
+            clause = re.split(
+                r"\b(?:UPC|GTIN|product|quantity)\b\s*"
+                r"(?:code|number|no\.?)?\s*[:#-]?",
+                clause,
+                maxsplit=1,
+                flags=re.IGNORECASE,
+            )[0]
+            for token in re.findall(
+                r"(?<![A-Za-z0-9])[A-Za-z0-9][A-Za-z0-9._/-]*(?![A-Za-z0-9])",
+                clause,
+            ):
+                add_candidate(token)
+
+        for match in re.finditer(
+            r"\blot(?!\s+codes\b)(?:\s+(?:code|number|no\.?))?"
+            r"\s*[:#-]?\s*([A-Za-z0-9][A-Za-z0-9._-]{0,31})\b",
+            value,
+            flags=re.IGNORECASE,
+        ):
+            add_candidate(match.group(1))
     return _unique(out)
 
 

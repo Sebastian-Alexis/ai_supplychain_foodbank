@@ -7,6 +7,7 @@ for pydeck. No function mutates the database.
 """
 
 from __future__ import annotations
+import json
 
 import sqlite3
 
@@ -21,8 +22,16 @@ STATE_COLORS = {
     "confirmed": "#c0392b", "probable": "#e67e22", "possible": "#b7950b",
     "unknown": "#7f8c8d", "cleared": "#1e8449",
 }
-KIND_COLORS = {"event": "#7b241c", "supplier": "#5d6d7e", "facility": "#85929e",
-               "product": "#2e86c1", "warehouse": "#117864", "pantry": "#6c3483"}
+KIND_COLORS = {
+    "event": "#7b241c",
+    "supplier": "#5d6d7e",
+    "facility": "#85929e",
+    "product": "#2e86c1",
+    "lot": "#8b6f47",
+    "po": "#6b7c93",
+    "warehouse": "#117864",
+    "pantry": "#6c3483",
+}
 _COLUMN = {"event": 0, "supplier": 1, "facility": 2, "product": 3,
            "lot": 4, "po": 4, "warehouse": 5, "pantry": 6}
 _COLUMN_TITLES = ["recall", "suppliers", "facilities", "products",
@@ -32,6 +41,16 @@ _RGB = {  # STATE_COLORS/KIND_COLORS as [r, g, b] for pydeck
     "confirmed": [192, 57, 43], "probable": [230, 126, 34], "possible": [183, 149, 11],
     "unknown": [127, 140, 141], "cleared": [30, 132, 73],
 }
+
+
+_GRAPH_LABEL_CHARS = 56
+
+
+def _graph_label(value: str) -> str:
+    """Bound marker text while preserving the full value in node detail."""
+    if len(value) <= _GRAPH_LABEL_CHARS:
+        return value
+    return value[:_GRAPH_LABEL_CHARS - 1].rstrip() + "…"
 
 
 def latest_event_id(conn: sqlite3.Connection) -> str | None:
@@ -154,7 +173,13 @@ def lineage_graph(conn: sqlite3.Connection, event_id: str) -> nx.DiGraph:
 
     def _product(pid: str, name: str, category: str):
         n = ("product", pid)
-        G.add_node(n, kind="product", label=name, state=None, detail=category)
+        G.add_node(
+            n,
+            kind="product",
+            label=_graph_label(name),
+            state=None,
+            detail=f"{category} · full product: {name}",
+        )
         return n
 
     for lot_id, st in sorted(lot_states.items()):
@@ -222,6 +247,223 @@ def lineage_graph(conn: sqlite3.Connection, event_id: str) -> nx.DiGraph:
                 G.add_node(wh, kind="warehouse", label=warehouses[wh_id]["name"],
                            state=None, detail="")
             G.add_edge(wh, pan)
+    return G
+
+
+def authority_graph(conn: sqlite3.Connection, event_id: str) -> nx.DiGraph:
+    """Authority-derived entities for an incident, without exposure claims."""
+    G = nx.DiGraph()
+    events = rows(
+        conn,
+        "SELECT authority, extraction_json FROM recall_events WHERE event_id=?",
+        (event_id,),
+    )
+    if not events:
+        return G
+    event = events[0]
+    extraction = (
+        json.loads(event["extraction_json"])
+        if event["extraction_json"]
+        else {}
+    )
+    details = [event["authority"]]
+    if extraction.get("pathogen"):
+        details.append(str(extraction["pathogen"]))
+    regions = extraction.get("distribution_regions", [])
+    if regions:
+        details.append(f"distribution: {', '.join(regions)}")
+    event_node = ("event", event_id)
+    G.add_node(
+        event_node,
+        kind="event",
+        label=event_id,
+        state=None,
+        detail=" · ".join(details),
+    )
+
+    entity_fields = (
+        ("supplier", "supplier_names"),
+        ("facility", "facility_names"),
+        ("product", "products"),
+    )
+    for kind, field in entity_fields:
+        values = list(dict.fromkeys(extraction.get(field, [])))
+        for index, value in enumerate(values, start=1):
+            node = (kind, f"authority:{field}:{index}")
+            G.add_node(
+                node,
+                kind=kind,
+                label=_graph_label(value),
+                state=None,
+                detail=(
+                    "authority-derived entity · not an operational record · "
+                    f"full value: {value}"
+                ),
+            )
+            G.add_edge(event_node, node)
+    return G
+
+
+def operations_context_graph(conn: sqlite3.Connection) -> nx.DiGraph:
+    """Synthetic operational topology, deliberately disconnected from recalls."""
+    G = nx.DiGraph()
+    warehouses = {
+        item["warehouse_id"]: item
+        for item in rows(conn, "SELECT * FROM warehouses")
+    }
+    pantries = {
+        item["pantry_id"]: item
+        for item in rows(conn, "SELECT * FROM pantries")
+    }
+
+    def add_supplier(supplier_id: str, name: str):
+        node = ("supplier", supplier_id)
+        G.add_node(
+            node,
+            kind="supplier",
+            label=name,
+            state=None,
+            detail="synthetic operations context",
+        )
+        return node
+
+    def add_product(product_id: str, name: str, category: str):
+        node = ("product", product_id)
+        G.add_node(
+            node,
+            kind="product",
+            label=_graph_label(name),
+            state=None,
+            detail=f"{category} · full product: {name} · synthetic operations context",
+        )
+        return node
+
+    operational_lots = rows(conn, """
+        SELECT l.*, p.name product_name, p.category, s.name supplier_name,
+               f.name facility_name
+        FROM inventory_lots l
+        JOIN products p USING (product_id)
+        JOIN suppliers s ON s.supplier_id=l.supplier_id
+        LEFT JOIN facilities f ON f.facility_id=l.facility_id
+        ORDER BY l.lot_id
+    """)
+    for lot in operational_lots:
+        supplier = add_supplier(lot["supplier_id"], lot["supplier_name"])
+        product = add_product(
+            lot["product_id"], lot["product_name"], lot["category"]
+        )
+        lot_node = ("lot", lot["lot_id"])
+        G.add_node(
+            lot_node,
+            kind="lot",
+            label=lot["lot_id"],
+            state=None,
+            detail=(
+                f"{lot['quantity_lb']:.0f} lb · status {lot['status']} · "
+                f"lot code {lot['supplier_lot_code'] or '(none)'} · "
+                "synthetic operations context"
+            ),
+        )
+        if lot["facility_id"]:
+            facility = ("facility", lot["facility_id"])
+            G.add_node(
+                facility,
+                kind="facility",
+                label=lot["facility_name"],
+                state=None,
+                detail="synthetic operations context",
+            )
+            G.add_edge(supplier, facility)
+            G.add_edge(facility, lot_node)
+        else:
+            G.add_edge(supplier, lot_node)
+        G.add_edge(product, lot_node)
+        warehouse = ("warehouse", f"receiving:{lot['warehouse_id']}")
+        G.add_node(
+            warehouse,
+            kind="warehouse",
+            label=f"{warehouses[lot['warehouse_id']]['name']} · receiving",
+            state=None,
+            detail="lot receiving endpoint · synthetic operations context",
+        )
+        G.add_edge(lot_node, warehouse)
+
+    operational_pos = rows(conn, """
+        SELECT po.*, p.name product_name, p.category, s.name supplier_name
+        FROM purchase_orders po
+        JOIN products p USING (product_id)
+        JOIN suppliers s ON s.supplier_id=po.supplier_id
+        ORDER BY po.po_id
+    """)
+    for po in operational_pos:
+        supplier = add_supplier(po["supplier_id"], po["supplier_name"])
+        product = add_product(
+            po["product_id"], po["product_name"], po["category"]
+        )
+        po_node = ("po", po["po_id"])
+        G.add_node(
+            po_node,
+            kind="po",
+            label=po["po_id"],
+            state=None,
+            detail=(
+                f"{po['quantity_lb']:.0f} lb inbound · "
+                f"ETA {po['expected_delivery']} · status {po['status']} · "
+                "synthetic operations context"
+            ),
+        )
+        G.add_edge(supplier, po_node)
+        G.add_edge(product, po_node)
+        warehouse = ("warehouse", f"receiving:{po['warehouse_id']}")
+        G.add_node(
+            warehouse,
+            kind="warehouse",
+            label=f"{warehouses[po['warehouse_id']]['name']} · receiving",
+            state=None,
+            detail="PO receiving endpoint · synthetic operations context",
+        )
+        G.add_edge(po_node, warehouse)
+
+    distribution_routes = rows(conn, """
+        SELECT d.product_id, d.warehouse_id, d.pantry_id,
+               p.name product_name, p.category,
+               SUM(d.quantity_lb) quantity_lb, COUNT(*) line_count
+        FROM distribution_plans d
+        JOIN products p USING (product_id)
+        GROUP BY d.product_id, d.warehouse_id, d.pantry_id
+        ORDER BY d.product_id, d.warehouse_id, d.pantry_id
+    """)
+    for route in distribution_routes:
+        product = add_product(
+            route["product_id"], route["product_name"], route["category"]
+        )
+        warehouse = (
+            "warehouse",
+            f"distribution:{route['product_id']}:{route['warehouse_id']}",
+        )
+        G.add_node(
+            warehouse,
+            kind="warehouse",
+            label=_graph_label(
+                f"{warehouses[route['warehouse_id']]['name']} · "
+                f"{route['product_name']} routes"
+            ),
+            state=None,
+            detail=(
+                "product-specific distribution route · "
+                f"full product: {route['product_name']} · synthetic operations context"
+            ),
+        )
+        pantry = ("pantry", route["pantry_id"])
+        G.add_node(
+            pantry,
+            kind="pantry",
+            label=pantries[route["pantry_id"]]["name"],
+            state=None,
+            detail="planned distribution destination · synthetic operations context",
+        )
+        G.add_edge(product, warehouse)
+        G.add_edge(warehouse, pantry)
     return G
 
 

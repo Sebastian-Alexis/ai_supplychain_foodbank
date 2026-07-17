@@ -61,7 +61,7 @@ def test_openfda_groups_records_without_calling_non_pathogens_pathogens():
                 "reason_for_recall": "Undeclared peanuts",
                 "distribution_pattern": "Nationwide",
                 "recall_number": "H-2-2026",
-                "code_info": "Lot 22",
+                "code_info": "Lot 22 UPC 028989100948",
                 "recall_initiation_date": "20260618",
                 "report_date": "20260708",
                 "product_quantity": "5 cases",
@@ -84,6 +84,10 @@ def test_openfda_groups_records_without_calling_non_pathogens_pathogens():
     ]
     assert incident.extraction.supplier_names == ["Example Foods"]
     assert incident.extraction.upcs == ["028989101105", "028989100948"]
+    assert incident.extraction.lot_codes == ["22"]
+    assert incident.extraction.excerpts["lot_codes"] == "Lot 22 UPC 028989100948"
+    assert incident.extraction.distribution_regions == ["Nationwide"]
+    assert incident.extraction.excerpts["distribution_regions"] == "Nationwide"
     assert incident.extraction.pathogen is None
     assert "plastic material" in incident.reason_summary
     assert "Undeclared peanuts" in incident.raw_text
@@ -107,12 +111,46 @@ def test_openfda_groups_records_without_calling_non_pathogens_pathogens():
             "Recall number": "H-2-2026",
             "Product": "Vegan patties, UPC 028989100948",
             "Reason for recall": "Undeclared peanuts",
-            "Code information": "Lot 22",
+            "Code information": "Lot 22 UPC 028989100948",
             "Recall initiation date": "20260618",
             "Report date": "20260708",
             "Quantity": "5 cases",
         },
     ]
+
+
+def test_openfda_extracts_multiple_values_after_plural_lot_header():
+    code_info = (
+        "Lot codes: 15525AA exp date: 6/2027 "
+        "00926AA exp date: 1/2028"
+    )
+    payload = {
+        "meta": {"last_updated": "2026-07-16"},
+        "results": [{
+            "event_id": "100001",
+            "status": "Ongoing",
+            "classification": "Class I",
+            "recalling_firm": "Example Foods",
+            "product_description": "Example recalled entrée",
+            "reason_for_recall": "Potential contamination with Salmonella",
+            "distribution_pattern": "Nationwide",
+            "recall_number": "F-1-2026",
+            "code_info": code_info,
+            "recall_initiation_date": "20260701",
+            "report_date": "20260716",
+            "product_quantity": "100 cases",
+        }],
+    }
+
+    incident = _normalize_openfda(
+        payload, limit=1, retrieved_at="2026-07-16T12:00:00+00:00"
+    )[0]
+
+    assert incident.extraction.lot_codes == ["15525AA", "00926AA"]
+    assert incident.extraction.excerpts["lot_codes"] == code_info
+    assert "codes" not in incident.extraction.lot_codes
+    assert "6/2027" not in incident.extraction.lot_codes
+    assert "1/2028" not in incident.extraction.lot_codes
 
 
 def test_fsis_filters_language_and_prioritizes_active_records():

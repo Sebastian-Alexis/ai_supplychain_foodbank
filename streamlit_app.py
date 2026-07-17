@@ -33,9 +33,15 @@ import streamlit as st
 
 from foodshock.agent import AgentRunResult, RecallResponseAgent
 from foodshock.datagen import generate
-from foodshock.demo_incidents import (DEFAULT_INCIDENT_KEY, INCIDENTS,
-                                      DemoIncident, incident_for_event,
-                                      prepare_demo_incident)
+from foodshock.demo_incidents import (
+    DEFAULT_INCIDENT_KEY,
+    INCIDENTS,
+    LIVE_SAMPLE_PREFIX,
+    DemoIncident,
+    incident_for_event,
+    prepare_demo_incident,
+    prepare_live_incident_overlay,
+)
 from foodshock.db import DEFAULT_DB, get_conn, rows
 from foodshock.engine import (BOX_LB, HORIZON_DAYS, approve_plan, build_plans,
                               days_of_supply, incident_focus, project_supply,
@@ -46,9 +52,18 @@ from foodshock.incident_sources import (
     fetch_live_incidents, parse_source_snapshot,
 )
 from foodshock.schemas import SCENARIO_LABELS, SCENARIOS
-from foodshock.viz import (STATE_COLORS, graph_figure, latest_event_id,
-                           latest_plan_ids, lineage_graph, map_arcs, map_deck,
-                           map_points)
+from foodshock.viz import (
+    STATE_COLORS,
+    authority_graph,
+    graph_figure,
+    latest_event_id,
+    latest_plan_ids,
+    lineage_graph,
+    map_arcs,
+    map_deck,
+    map_points,
+    operations_context_graph,
+)
 
 st.set_page_config(page_title="Farms for Food | Agentic response framework", layout="wide")
 
@@ -146,7 +161,7 @@ def _inject_theme() -> None:
         .fs-monogram {
           display: grid;
           place-items: center;
-          width: 2.25rem;
+          width: 2.5rem;
           height: 2.25rem;
           border: 1px solid #8eb8b1;
           color: #fffdf8;
@@ -498,6 +513,7 @@ def _replay_incident(
     conn: sqlite3.Connection,
     incident: IncidentChoice,
     *,
+    include_live_sample: bool = True,
     on_event: Callable[[dict], None] | None = None,
 ) -> AgentRunResult:
     """Reset synthetic operations, then process one curated or official incident."""
@@ -510,6 +526,8 @@ def _replay_incident(
             event_id=incident.event_id,
             source_url=incident.source_url,
         )
+    if include_live_sample:
+        prepare_live_incident_overlay(conn, incident.extraction)
     return agent.run(
         incident.raw_text,
         event_id=incident.event_id,
@@ -528,6 +546,15 @@ def _has_exposure(conn: sqlite3.Connection, event_id: str) -> bool:
         (event_id,),
     )
     return bool(found and found[0]["c"])
+
+
+def _live_sample_present(conn: sqlite3.Connection) -> bool:
+    found = rows(
+        conn,
+        "SELECT 1 FROM inventory_lots WHERE lot_id LIKE ? LIMIT 1",
+        (f"{LIVE_SAMPLE_PREFIX}%",),
+    )
+    return bool(found)
 
 
 def _recompute(conn: sqlite3.Connection, event_id: str) -> None:
@@ -581,6 +608,97 @@ def _gaps(conn, run_id: str) -> list[str]:
         (run_id,))]
 
 
+def _extraction_facts(extraction: dict) -> dict[str, str]:
+    start_date = extraction.get("production_date_start")
+    end_date = extraction.get("production_date_end")
+    if start_date and end_date:
+        production_window = f"{start_date} to {end_date}"
+    else:
+        production_window = start_date or end_date or "—"
+    return {
+        "Products": ", ".join(extraction.get("products", [])) or "—",
+        "Suppliers": ", ".join(extraction.get("supplier_names", [])) or "—",
+        "Facilities": ", ".join(extraction.get("facility_names", [])) or "—",
+        "Lot codes": ", ".join(extraction.get("lot_codes", [])) or "—",
+        "UPCs": ", ".join(extraction.get("upcs", [])) or "—",
+        "Production window": production_window,
+        "Regions": ", ".join(extraction.get("distribution_regions", [])) or "—",
+        "Biological pathogen": extraction.get("pathogen") or "—",
+        "Action required": extraction.get("action_required") or "—",
+    }
+
+
+def _render_authority_record_tables(raw_text: str) -> None:
+    overview, source_records = parse_source_snapshot(raw_text)
+    if overview:
+        st.table(pd.DataFrame({
+            "authority field": overview.keys(),
+            "source value": overview.values(),
+        }))
+    for source_record in source_records:
+        record_number = source_record.get("Recall number", "number not stated")
+        st.markdown(
+            f"**Product record {source_record.get('Record', '?')} · "
+            f"{record_number}**"
+        )
+        record_values = {
+            key: value
+            for key, value in source_record.items()
+            if key != "Record"
+        }
+        st.table(pd.DataFrame({
+            "authority field": record_values.keys(),
+            "source value": record_values.values(),
+        }))
+
+
+def _view_selected_live_incident(
+    incident: LiveIncident,
+    analyzed_incident: IncidentChoice | None,
+) -> None:
+    """Show the selected authority record immediately, never a stale run."""
+    analyzed_label = (
+        analyzed_incident.title if analyzed_incident is not None else "none"
+    )
+    _hero(
+        f"Selected authority record · {incident.event_id}",
+        incident.title,
+        f"{incident.reason_summary} Review the source fields below, then run "
+        "the bounded analysis against synthetic operations.",
+    )
+    st.warning(
+        f"**Selected, not analyzed.** The current analyzed incident is "
+        f"**{analyzed_label}**. Its result is hidden so it cannot be mistaken "
+        "for the selected API record. Click **Analyze official incident** in "
+        "the sidebar to create a new assessment."
+    )
+    st.caption(
+        f"Retrieved {incident.retrieved_at} from "
+        f"[{incident.source_label}]({incident.source_url}). {incident.trust_warning}"
+    )
+    st.subheader("Authority record facts")
+    st.caption(
+        "These values come directly from the normalized authority API snapshot. "
+        "They describe the recall, not food-bank exposure."
+    )
+    _render_authority_record_tables(incident.raw_text)
+    st.subheader("API-derived matching fields")
+    extraction = incident.extraction.model_dump(mode="json")
+    st.table(pd.DataFrame({
+        "field": _extraction_facts(extraction).keys(),
+        "authority-derived value": _extraction_facts(extraction).values(),
+    }))
+    excerpts = extraction.get("excerpts", {})
+    if excerpts:
+        st.caption("Verbatim normalized provenance")
+        st.table(pd.DataFrame({
+            "field": excerpts.keys(),
+            "supporting source value": excerpts.values(),
+        }))
+    with st.expander("Normalized source snapshot (API fields)"):
+        st.text(incident.raw_text)
+
+
 # ------------------------------------------------------------------ views
 
 def view_exposure(conn, event_id: str) -> None:
@@ -589,42 +707,24 @@ def view_exposure(conn, event_id: str) -> None:
     source_api = (ev["extraction_method"] or "").split("+", 1)[0].endswith("-api")
     if source_api:
         warning = OPENFDA_WARNING if ev["authority"] == "FDA" else FSIS_WARNING
+        sample_note = (
+            f" Records whose IDs start with `{LIVE_SAMPLE_PREFIX}` are an "
+            "optional, explicitly synthetic trace sample built from authority "
+            "identifiers."
+            if _live_sample_present(conn)
+            else " No incident-linked synthetic trace sample is active."
+        )
         st.warning(
             f"**Official incident record; synthetic operations.** {warning} "
-            "The API supplied the incident only—not the inventory, purchase orders, "
-            "matches, or recovery market shown here."
+            "The API supplied the incident only—not inventory, purchase orders, "
+            f"matches, or recovery records.{sample_note}"
         )
         published = ev["published_at"] or "not stated"
         st.markdown(
             f"**Published:** {published} · "
             f"[Open official source record]({ev['source_url']})"
         )
-        overview, source_records = parse_source_snapshot(ev["raw_text"])
-        st.subheader("Authority record facts")
-        st.caption(
-            "Values below come from the normalized authority API snapshot. "
-            "They describe the recall—not this food bank's exposure."
-        )
-        if overview:
-            st.table(pd.DataFrame({
-                "authority field": overview.keys(),
-                "source value": overview.values(),
-            }))
-        for source_record in source_records:
-            record_number = source_record.get("Recall number", "number not stated")
-            st.markdown(
-                f"**Product record {source_record.get('Record', '?')} · "
-                f"{record_number}**"
-            )
-            record_values = {
-                key: value
-                for key, value in source_record.items()
-                if key != "Record"
-            }
-            st.table(pd.DataFrame({
-                "authority field": record_values.keys(),
-                "source value": record_values.values(),
-            }))
+        _render_authority_record_tables(ev["raw_text"])
         st.divider()
 
     left, right = st.columns([1, 1])
@@ -636,23 +736,7 @@ def view_exposure(conn, event_id: str) -> None:
             f"**{ev['event_id']}** · authority {ev['authority']} · status {ev['status']} · "
             f"extraction {ev['extraction_method'] or '-'} "
             f"(confidence {ev['extraction_confidence'] or 0:g})")
-        start_date = ext.get("production_date_start")
-        end_date = ext.get("production_date_end")
-        if start_date and end_date:
-            production_window = f"{start_date} to {end_date}"
-        else:
-            production_window = start_date or end_date or "—"
-        facts = {
-            "Products": ", ".join(ext.get("products", [])) or "—",
-            "Suppliers": ", ".join(ext.get("supplier_names", [])) or "—",
-            "Facilities": ", ".join(ext.get("facility_names", [])) or "—",
-            "Lot codes": ", ".join(ext.get("lot_codes", [])) or "—",
-            "UPCs": ", ".join(ext.get("upcs", [])) or "—",
-            "Production window": production_window,
-            "Regions": ", ".join(ext.get("distribution_regions", [])) or "—",
-            "Biological pathogen": ext.get("pathogen") or "—",
-            "Action required": ext.get("action_required") or "—",
-        }
+        facts = _extraction_facts(ext)
         st.table(pd.DataFrame({"fact": facts.keys(), "extracted value": facts.values()}))
         if ev["human_confirmed"]:
             st.success("Notice extraction human-confirmed.")
@@ -1013,18 +1097,47 @@ def view_plan(conn, event_id: str) -> None:
 
 
 def view_graph(conn, event_id: str) -> None:
-    st.caption("Lineage derived from relational joins for THIS incident's evidence "
-               "(PLAN.md §8): recall → suppliers/facilities/products → specific lot or PO "
-               "→ warehouse → pantry. Colors are global effective states; convergence on "
-               "records never fabricates supplier-to-supplier paths.")
-    G = lineage_graph(conn, event_id)
-    if not G.number_of_nodes():
-        st.info("No implicated lineage for this incident.")
+    linked = lineage_graph(conn, event_id)
+    if linked.number_of_edges():
+        st.caption(
+            "Lineage derived from relational joins for THIS incident's evidence "
+            "(PLAN.md §8): recall → suppliers/facilities/products → specific lot or PO "
+            "→ warehouse → pantry. Colors are global effective states; convergence on "
+            "records never fabricates supplier-to-supplier paths."
+        )
+        st.plotly_chart(graph_figure(linked), use_container_width=True)
+        legend = " · ".join(
+            f"<span style='color:{color}'>&#9632;</span> {state}"
+            for state, color in STATE_COLORS.items()
+        )
+        st.markdown(f"Match-state colors: {legend}", unsafe_allow_html=True)
         return
-    st.plotly_chart(graph_figure(G), use_container_width=True)
-    legend = " · ".join(f"<span style='color:{c}'>&#9632;</span> {s}"
-                        for s, c in STATE_COLORS.items())
-    st.markdown(f"Match-state colors: {legend}", unsafe_allow_html=True)
+
+    st.info(
+        "**No operational exposure edge was found.** The incident graph and "
+        "synthetic network context still render below, but they remain separate: "
+        "there is no incident → inventory or incident → PO edge."
+    )
+    st.subheader("Authority incident entities")
+    st.caption(
+        "Incident → supplier, facility, and product nodes come only from the "
+        "authority-derived extraction. They are not food-bank operational records."
+    )
+    authority = authority_graph(conn, event_id)
+    st.plotly_chart(graph_figure(authority), use_container_width=True)
+
+    st.subheader("Synthetic operations context — no exposure link")
+    st.caption(
+        "Exact synthetic records are shown as two safe topologies: supplier/product "
+        "attributes converge on lots and POs ending at receiving warehouses; "
+        "product-specific plan routes lead separately to pantries. Neither topology "
+        "is connected to the incident, and no lot/PO path is inferred to a pantry."
+    )
+    context = operations_context_graph(conn)
+    if context.number_of_nodes():
+        st.plotly_chart(graph_figure(context), use_container_width=True)
+    else:
+        st.info("No synthetic operational records are loaded.")
 
 
 def view_map(conn, event_id: str) -> None:
@@ -1050,6 +1163,8 @@ def view_map(conn, event_id: str) -> None:
 def _run_animated_replay(
     conn: sqlite3.Connection,
     incident: IncidentChoice,
+    *,
+    include_live_sample: bool = True,
 ) -> AgentRunResult:
     """Render the real agent event stream with a deliberate presentation pace."""
     seen: set[tuple[str, str, str]] = set()
@@ -1070,7 +1185,12 @@ def _run_animated_replay(
             run_status.write(f"{len(seen):02d} · {label}")
             time.sleep(0.22)
 
-        result = _replay_incident(conn, incident, on_event=show_event)
+        result = _replay_incident(
+            conn,
+            incident,
+            include_live_sample=include_live_sample,
+            on_event=show_event,
+        )
         progress.progress(100, text="Assessment ready for operator review")
         run_status.update(
             label=f"{incident.title} ready",
@@ -1324,8 +1444,12 @@ def _technical_page(conn: sqlite3.Connection) -> None:
             The framework does not encode “onion recall” as its workflow. It accepts
             a real authority record or curated notice; the same agent, tools, state
             machine, constraints, transcript, and human-control contract run unchanged.
-            Official incidents are compared honestly with synthetic operations, so zero
-            exposure is an expected result—not a reason to invent matching lots.
+            Official incidents have two explicit modes. With the trace sample off, the
+            authority record is checked against the untouched seed network and zero
+            exposure remains the honest result. With it on, visibly prefixed
+            `SYN-LIVE-*` records copy only source-supported identifiers into synthetic
+            operations so matching and graph behavior can be inspected; that result is
+            a demonstration, never evidence of real exposure.
 
             - **openFDA:** current ongoing food-enforcement events.
             - **USDA FSIS:** recalls and public-health alerts, best-effort and independently cached.
@@ -1371,7 +1495,7 @@ def main() -> None:
     st.sidebar.markdown(
         """
         <div class="fs-brand">
-          <div class="fs-monogram">FF</div>
+          <div class="fs-monogram">FFF</div>
           <div class="fs-brand-name">Farms for Food</div>
         </div>
         <div class="fs-project-kicker">Agentic operations framework</div>
@@ -1420,6 +1544,7 @@ def main() -> None:
 
     selected_incident: IncidentChoice | None = None
     selected_key: str | None = None
+    include_live_sample = False
     if source_mode == "demo":
         if "selected_incident_key" not in st.session_state:
             st.session_state.selected_incident_key = (
@@ -1489,6 +1614,20 @@ def main() -> None:
             st.sidebar.markdown(
                 f"[Open official source record]({selected_incident.source_url})"
             )
+            include_live_sample = st.sidebar.toggle(
+                "Add incident-linked synthetic trace sample",
+                value=True,
+                key=f"include_{source_mode}_live_sample",
+                help=(
+                    "Creates one SYN-LIVE lot and PO from the selected authority "
+                    "identifiers so the matching and lineage workflow can be inspected"
+                ),
+            )
+            st.sidebar.caption(
+                "On: visibly labeled demonstration records exercise the matcher. "
+                "Off: the official incident is tested only against the untouched "
+                "seed network, where zero exposure is valid."
+            )
         else:
             st.sidebar.info("No incidents are currently available from this feed.")
 
@@ -1507,7 +1646,11 @@ def main() -> None:
         disabled=selected_incident is None,
     ):
         try:
-            result = _run_animated_replay(conn, selected_incident)
+            result = _run_animated_replay(
+                conn,
+                selected_incident,
+                include_live_sample=include_live_sample,
+            )
         except ExtractionUnavailable as exc:
             st.sidebar.error(f"Extraction unavailable: {exc}")
             st.stop()
@@ -1516,6 +1659,9 @@ def main() -> None:
         st.session_state.last_run_id = result.run_id
         st.session_state.last_run_has_exposure = result.has_exposure
         st.session_state.active_runtime_incident = selected_incident
+        st.session_state.last_run_live_sample = (
+            include_live_sample and isinstance(selected_incident, LiveIncident)
+        )
         st.rerun()
 
     replay_count = st.session_state.get("replay_count", 0)
@@ -1551,7 +1697,10 @@ def main() -> None:
         st.markdown(
             "- **Incident source:** official API record or curated replay\n"
             "- **Operations:** synthetic inventory, POs, demand, and recovery market\n"
-            "- **Source boundary:** APIs never manufacture operational matches\n"
+            "- **Source boundary:** APIs provide incident facts only; they never provide "
+            "or confirm the food-bank records\n"
+            f"- **Trace sample:** optional `{LIVE_SAMPLE_PREFIX}*` records visibly copy "
+            "authority identifiers into synthetic operations for demonstration\n"
             "- **Language layer:** structured API mapping or cached notice extraction\n"
             "- **Control:** deterministic matching, projection, and optimization\n"
             "- **Execution:** no food-safety or plan action without human review"
@@ -1572,6 +1721,18 @@ def main() -> None:
 
     if page == "technical":
         _technical_page(conn)
+        return
+
+    selected_live_pending = (
+        isinstance(selected_incident, LiveIncident)
+        and (
+            not isinstance(active_choice, LiveIncident)
+            or active_choice.key != selected_incident.key
+            or active_choice.raw_text != selected_incident.raw_text
+        )
+    )
+    if selected_live_pending:
+        _view_selected_live_incident(selected_incident, active_choice)
         return
 
     if not ready:
@@ -1631,6 +1792,18 @@ def main() -> None:
             f"[{active_choice.source_label}]({active_choice.source_url}). "
             "The source did not supply or confirm any displayed inventory or PO record."
         )
+        if _live_sample_present(conn):
+            st.warning(
+                f"**Synthetic trace sample active.** Every `{LIVE_SAMPLE_PREFIX}*` "
+                "lot, PO, supplier, facility, or product is a demonstration record "
+                "created from authority identifiers—not evidence of real exposure."
+            )
+        else:
+            st.info(
+                "**Untouched-network assessment.** No incident-linked trace sample "
+                "was inserted; any match comes only from the pre-existing synthetic "
+                "seed network."
+            )
 
     run_id = _latest_run_id(conn)
     if run_id:
