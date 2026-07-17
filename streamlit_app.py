@@ -124,8 +124,12 @@ def _inject_theme() -> None:
         [data-testid="stSidebar"] h3,
         [data-testid="stSidebar"] p,
         [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] li,
+        [data-testid="stSidebar"] span,
+        [data-testid="stSidebar"] strong,
+        [data-testid="stSidebar"] summary,
         [data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
-          color: #f7f2e8;
+          color: #f7f2e8 !important;
         }
         [data-testid="stSidebar"] hr { border-color: #3f625e; }
         .block-container { max-width: 1380px; padding-top: 2rem; }
