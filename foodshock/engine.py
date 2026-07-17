@@ -650,14 +650,18 @@ def _greedy_alloc(pantries, demand7, products,
     return allocs, transfers
 
 
-def build_plans(conn: sqlite3.Connection, budget: float = BUDGET_USD) -> tuple[str, str]:
+def build_plans(conn: sqlite3.Connection, budget: float = BUDGET_USD,
+                *, recovery_enabled: bool = True) -> tuple[str, str]:
     """Write the do-nothing baseline and the recommended recovery plan.
 
     Both draw ONLY on the conservative pool -- cleared on-hand stock at its
     warehouse from day 0 plus safe inbound POs at their PO's warehouse at ETA
     (PLAN.md §11 supply boundary), each usable only within its expiry window.
     Pantries are served from their serving warehouse; cross-warehouse stock
-    moves as explicit transfer lines. Recommended = single weighted
+    moves as explicit transfer lines. When no record is exposed to the active
+    incident, the recommended assessment intentionally mirrors the baseline:
+    unrelated synthetic-network optimization must not masquerade as
+    incident-driven recovery. Otherwise, recommended = single weighted
     day-indexed LP (linearized equity epigraph). The greedy heuristic stands
     in ONLY for solver-layer failures -- audited, never silent; engine bugs
     raise out of _solve_lp instead of hiding behind the fallback.
@@ -669,6 +673,13 @@ def build_plans(conn: sqlite3.Connection, budget: float = BUDGET_USD) -> tuple[s
     baseline_id = _write_plan(conn, "baseline", "do-nothing", {}, baseline_allocs,
                               baseline_xfers, products, offers, serving)
     evaluate_plan(conn, baseline_id)
+    if not recovery_enabled:
+        rec_id = _write_plan(
+            conn, "recommended", "no-exposure", {}, baseline_allocs,
+            baseline_xfers, products, offers, serving,
+        )
+        evaluate_plan(conn, rec_id)
+        return baseline_id, rec_id
 
     buys, allocs, xfers, status = _solve_lp(pantries, demand7, products, buckets,
                                             offers, budget, serving)
@@ -1131,6 +1142,13 @@ def approve_plan(conn: sqlite3.Connection, plan_id: str, actor: str, *,
     plan = found[0]
     if plan["kind"] != "recommended":
         raise ValueError("only a recommended recovery plan can be approved")
+    if plan["method"] == "no-exposure":
+        audit(conn, actor, "plan_approval_blocked",
+              {"plan_id": plan_id, "reason": "no_exposure"})
+        conn.commit()
+        raise ValueError(
+            "no evidence-linked exposure exists; there is no recovery action to approve"
+        )
 
     latest = rows(conn, "SELECT plan_id FROM plans WHERE kind='recommended' "
                         "ORDER BY created_at DESC, rowid DESC LIMIT 1")[0]["plan_id"]

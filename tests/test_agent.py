@@ -13,6 +13,7 @@ from foodshock.datagen import generate
 from foodshock.db import DATA_DIR, rows
 from foodshock.demo_incidents import INCIDENTS, prepare_demo_incident
 from foodshock.engine import BOX_LB, approve_plan, build_plans, incident_focus
+from foodshock.schemas import RecallExtraction
 from test_timing import _conn
 
 EVENT_ID = "FDA-DEMO-2026-001"
@@ -303,3 +304,72 @@ def test_solver_fallback_recovers_nonproduce_incidents(
     )
     assert len(fallback) == 1
     assert json.loads(fallback[0]["detail_json"])["status"] == "forced-test-failure"
+
+
+def test_provided_api_extraction_with_zero_exposure_never_creates_action_plan():
+    conn = _conn()
+    generate(conn)
+    raw_text = (
+        "OFFICIAL SOURCE: openFDA Food Enforcement API\n"
+        "Product: Moringa capsules\n"
+        "Recalling firm: MOGO Moringa LLC\n"
+        "Reason for recall: Salmonella\n"
+    )
+    extraction = RecallExtraction(
+        authority="FDA",
+        products=["Moringa capsules"],
+        supplier_names=["MOGO Moringa LLC"],
+        pathogen="Salmonella",
+        excerpts={
+            "products": "Moringa capsules",
+            "supplier_names": "MOGO Moringa LLC",
+            "pathogen": "Salmonella",
+        },
+        confidence=0.99,
+    )
+
+    result = RecallResponseAgent(conn, allow_llm=False).run(
+        raw_text,
+        event_id="FDA-LIVE-TEST",
+        source_url="https://api.fda.gov/food/enforcement.json",
+        published_at="2026-07-08",
+        provided_extraction=extraction,
+        provided_extraction_method="openfda-api",
+    )
+
+    assert result.has_exposure is False
+    assert result.match_counts == {}
+    assert result.before_after["baseline"] == result.before_after["recommended"]
+    assert "no evidence-linked lot or inbound-order matches" in result.narration
+    event = rows(
+        conn,
+        "SELECT authority, published_at, extraction_method FROM recall_events "
+        "WHERE event_id='FDA-LIVE-TEST'",
+    )[0]
+    assert event == {
+        "authority": "FDA",
+        "published_at": "2026-07-08",
+        "extraction_method": "openfda-api",
+    }
+    plans = rows(
+        conn,
+        "SELECT plan_id, kind, method, metrics_json FROM plans ORDER BY rowid",
+    )
+    assert [(plan["kind"], plan["method"]) for plan in plans] == [
+        ("baseline", "do-nothing"),
+        ("recommended", "no-exposure"),
+    ]
+    assert json.loads(plans[0]["metrics_json"]) == json.loads(plans[1]["metrics_json"])
+    assert rows(
+        conn,
+        "SELECT action FROM plan_lines WHERE plan_id=? AND action='purchase'",
+        (result.recommended_id,),
+    ) == []
+    with pytest.raises(ValueError, match="no evidence-linked exposure"):
+        approve_plan(conn, result.recommended_id, "operator-jane", allow_llm=False)
+    assert rows(conn, "SELECT * FROM comms") == []
+    blocked = rows(
+        conn,
+        "SELECT detail_json FROM audit_log WHERE action='plan_approval_blocked'",
+    )
+    assert json.loads(blocked[-1]["detail_json"])["reason"] == "no_exposure"

@@ -9,7 +9,8 @@
 DB resolution: $FOODSHOCK_DB if set (shared file, single-operator demo);
 otherwise each browser session works on its own temp COPY of data/foodshock.db
 so concurrent viewers (Streamlit Community Cloud) can replay/reset/approve
-without clobbering each other. All demo data is synthetic (PLAN.md §3).
+without clobbering each other. Operational demo data is synthetic (PLAN.md §3);
+incident records may come from the official FDA or USDA APIs.
 
 Run:  streamlit run streamlit_app.py
 """
@@ -40,6 +41,10 @@ from foodshock.engine import (BOX_LB, HORIZON_DAYS, approve_plan, build_plans,
                               days_of_supply, incident_focus, project_supply,
                               propagate, review_match)
 from foodshock.extraction import ExtractionUnavailable
+from foodshock.incident_sources import (
+    FSIS_WARNING, OPENFDA_WARNING, IncidentSourceError, LiveIncident,
+    fetch_live_incidents,
+)
 from foodshock.schemas import SCENARIO_LABELS, SCENARIOS
 from foodshock.viz import (STATE_COLORS, graph_figure, latest_event_id,
                            latest_plan_ids, lineage_graph, map_arcs, map_deck,
@@ -53,6 +58,27 @@ OPERATOR = "operator (streamlit)"
 SAFETY_CAPTION = ("Confirmed recalled or quarantined lots and canceled POs are excluded "
                   "from every scenario and every plan; no toggle re-includes them (PLAN.md §10).")
 STATE_ORDER = ["confirmed", "probable", "possible", "unknown", "not_matched"]
+
+IncidentChoice = DemoIncident | LiveIncident
+SOURCE_LABELS = {
+    "demo": "Curated incident demos",
+    "openfda": "Live · FDA openFDA",
+    "fsis": "Live · USDA FSIS",
+}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_live_incidents(provider: str) -> tuple[list[LiveIncident], str | None]:
+    """Cache each authority independently, including temporary failure results."""
+    try:
+        incidents = fetch_live_incidents(provider)  # type: ignore[arg-type]
+    except IncidentSourceError as exc:
+        return [], str(exc)
+    return incidents, None
+
+def _set_app_page(page: str) -> None:
+    st.session_state.app_page = page
+
 
 REPLAY_STAGES: dict[tuple[str, str, str], tuple[int, str]] = {
     ("observe", "tool_result", "ingest_notice"):
@@ -466,26 +492,45 @@ def _scenario_ready(conn: sqlite3.Connection) -> bool:
 
 def _replay_incident(
     conn: sqlite3.Connection,
-    incident: DemoIncident,
+    incident: IncidentChoice,
     *,
     on_event: Callable[[dict], None] | None = None,
 ) -> AgentRunResult:
-    """Reset the synthetic network and run one selected incident end to end."""
+    """Reset synthetic operations, then process one curated or official incident."""
     generate(conn)
-    prepare_demo_incident(conn, incident)
     agent = RecallResponseAgent(conn, allow_llm=ALLOW_LLM, on_event=on_event)
+    if isinstance(incident, DemoIncident):
+        prepare_demo_incident(conn, incident)
+        return agent.run(
+            incident.notice_path.read_text(),
+            event_id=incident.event_id,
+            source_url=incident.source_url,
+        )
     return agent.run(
-        incident.notice_path.read_text(),
+        incident.raw_text,
         event_id=incident.event_id,
         source_url=incident.source_url,
+        published_at=incident.published_at,
+        provided_extraction=incident.extraction,
+        provided_extraction_method=f"{incident.provider}-api",
     )
+
+
+def _has_exposure(conn: sqlite3.Connection, event_id: str) -> bool:
+    found = rows(
+        conn,
+        "SELECT COUNT(*) c FROM matches WHERE event_id=? AND state!='not_matched' "
+        "AND NOT (reviewed=1 AND review_action='cleared')",
+        (event_id,),
+    )
+    return bool(found and found[0]["c"])
 
 
 def _recompute(conn: sqlite3.Connection, event_id: str) -> None:
     """After any clearance action: refresh feasibility and supersede the plan
     pair so no view presents a plan built on a stale pool (PLAN.md §11)."""
     propagate(conn, event_id)
-    build_plans(conn)
+    build_plans(conn, recovery_enabled=_has_exposure(conn, event_id))
 
 
 # ------------------------------------------------------------------ helpers
@@ -537,6 +582,19 @@ def _gaps(conn, run_id: str) -> list[str]:
 def view_exposure(conn, event_id: str) -> None:
     ev = rows(conn, "SELECT * FROM recall_events WHERE event_id=?", (event_id,))[0]
     ext = json.loads(ev["extraction_json"]) if ev["extraction_json"] else {}
+    source_api = (ev["extraction_method"] or "").endswith("-api")
+    if source_api:
+        warning = OPENFDA_WARNING if ev["authority"] == "FDA" else FSIS_WARNING
+        st.warning(
+            f"**Official incident record; synthetic operations.** {warning} "
+            "The API supplied the incident only—not the inventory, purchase orders, "
+            "matches, or recovery market shown here."
+        )
+        published = ev["published_at"] or "not stated"
+        st.markdown(
+            f"**Published:** {published} · "
+            f"[Open official source record]({ev['source_url']})"
+        )
 
     left, right = st.columns([1, 1])
     with left:
@@ -560,7 +618,7 @@ def view_exposure(conn, event_id: str) -> None:
         st.table(pd.DataFrame({"fact": facts.keys(), "extracted value": facts.values()}))
         if ev["human_confirmed"]:
             st.success("Notice extraction human-confirmed.")
-        elif st.button("Confirm extraction against source notice"):
+        elif st.button("Confirm extraction against source record"):
             conn.execute("UPDATE recall_events SET human_confirmed=1 WHERE event_id=?", (event_id,))
             conn.commit()
             st.rerun()
@@ -570,7 +628,7 @@ def view_exposure(conn, event_id: str) -> None:
         if exc:
             st.dataframe(pd.DataFrame({"field": exc.keys(), "supporting quote": exc.values()}),
                          hide_index=True, use_container_width=True)
-        with st.expander("Raw notice text"):
+        with st.expander("Normalized source snapshot (API fields)"):
             st.text(ev["raw_text"])
 
     st.divider()
@@ -781,6 +839,14 @@ def view_plan(conn, event_id: str) -> None:
     bm, rm = _metrics(base), _metrics(rec)
     focus = incident_focus(conn, event_id)
     focus_label = focus["category"].replace("_", " ").title()
+    has_exposure = _has_exposure(conn, event_id)
+    if not has_exposure:
+        st.info(
+            "No evidence-linked inventory lot or inbound order was found in the "
+            "synthetic operational network. No recall-triggered recovery action is "
+            "recommended; the assessment below intentionally mirrors the pre-existing "
+            "network baseline."
+        )
 
     st.caption(f"Comparing latest pair: {base_id} (do-nothing) vs {rec_id} "
                f"({rec['method']}). Earlier drafts are superseded and retained in the audit trail.")
@@ -862,7 +928,13 @@ def view_plan(conn, event_id: str) -> None:
             st.caption("none")
 
     st.divider()
-    if rec["status"] == "approved":
+    if not has_exposure:
+        st.success(
+            "No recall-triggered action package requires approval. Review the official "
+            "source and the zero-exposure evidence; the generic network baseline is "
+            "shown for context only."
+        )
+    elif rec["status"] == "approved":
         st.success(f"Plan {rec_id} approved by {rec['approved_by']} at {rec['approved_at']}.")
     elif rec["status"] == "rejected":
         st.warning(f"Plan {rec_id} was rejected. Replay or adjust reviews to regenerate.")
@@ -934,7 +1006,7 @@ def view_map(conn, event_id: str) -> None:
 
 def _run_animated_replay(
     conn: sqlite3.Connection,
-    incident: DemoIncident,
+    incident: IncidentChoice,
 ) -> AgentRunResult:
     """Render the real agent event stream with a deliberate presentation pace."""
     seen: set[tuple[str, str, str]] = set()
@@ -956,7 +1028,7 @@ def _run_animated_replay(
             time.sleep(0.22)
 
         result = _replay_incident(conn, incident, on_event=show_event)
-        progress.progress(100, text="Plan ready for operator review")
+        progress.progress(100, text="Assessment ready for operator review")
         run_status.update(
             label=f"{incident.title} ready",
             state="complete",
@@ -971,6 +1043,13 @@ def _technical_page(conn: sqlite3.Connection) -> None:
     ready = _scenario_ready(conn)
     event_id = latest_event_id(conn) if ready else None
     active_incident = incident_for_event(event_id)
+    active_runtime_incident = st.session_state.get("active_runtime_incident")
+    active_choice = (
+        active_runtime_incident
+        if active_runtime_incident is not None
+        and active_runtime_incident.event_id == event_id
+        else active_incident
+    )
     run_id = _latest_run_id(conn) if ready else None
 
     transcript_events = 0
@@ -978,6 +1057,7 @@ def _technical_page(conn: sqlite3.Connection) -> None:
     open_gaps = 0
     rec_id = None
     plan_status = "not run"
+    plan_method: str | None = None
     hard_violations: int | str = "—"
     if run_id:
         transcript_events = rows(
@@ -999,6 +1079,7 @@ def _technical_page(conn: sqlite3.Connection) -> None:
         if rec_id:
             plan = rows(conn, "SELECT * FROM plans WHERE plan_id=?", (rec_id,))[0]
             plan_status = plan["status"]
+            plan_method = plan["method"]
             hard_violations = _metrics(plan).get("hard_constraint_violations", "—")
 
     st.markdown(
@@ -1008,8 +1089,9 @@ def _technical_page(conn: sqlite3.Connection) -> None:
           <h1>Language understands. Code decides. Humans authorize.</h1>
           <p>
             FoodShock is a reusable incident-response framework: a code-orchestrated
-            agent turns an unstructured safety notice into evidence-linked operational
-            state, invokes deterministic planning tools, and stops at an approval gate.
+            agent turns an official API record or unstructured safety notice into
+            evidence-linked operational state, invokes deterministic planning tools,
+            and stops at a human review or approval gate.
           </p>
         </section>
         """,
@@ -1026,25 +1108,31 @@ def _technical_page(conn: sqlite3.Connection) -> None:
     m4.metric("Hard violations", hard_violations,
               help="Recomputed by deterministic plan evaluation.")
     if run_id:
-        label = active_incident.title if active_incident else event_id
-        st.caption(
-            f"Live proof from {label} · `{run_id}` · recommended plan "
-            f"`{rec_id}` is **{plan_status}**."
-        )
+        label = active_choice.title if active_choice else event_id
+        if plan_method == "no-exposure":
+            st.caption(
+                f"Live proof from {label} · `{run_id}` · zero-exposure assessment "
+                f"`{rec_id}` is **{plan_status}**."
+            )
+        else:
+            st.caption(
+                f"Live proof from {label} · `{run_id}` · recommended plan "
+                f"`{rec_id}` is **{plan_status}**."
+            )
     else:
-        st.caption("Run a demo incident from the sidebar to populate these proof points.")
+        st.caption("Run an incident from the sidebar to populate these proof points.")
 
     st.subheader("One explicit incident-response loop")
     st.markdown(
         """
         <div class="fs-flow">
-          <div class="fs-flow-node"><strong>01 · Observe</strong><span>Ingest a notice and retain its raw source.</span></div>
-          <div class="fs-flow-node"><strong>02 · Extract</strong><span>Produce schema-validated entities with verbatim excerpts.</span></div>
+          <div class="fs-flow-node"><strong>01 · Observe</strong><span>Fetch or replay an incident and retain its normalized source snapshot.</span></div>
+          <div class="fs-flow-node"><strong>02 · Extract</strong><span>Map structured API fields or validate notice entities with verbatim excerpts.</span></div>
           <div class="fs-flow-node"><strong>03 · Resolve</strong><span>Rank lot and PO matches across four evidence tiers.</span></div>
           <div class="fs-flow-node"><strong>04 · Propagate</strong><span>Trace exposure into inventory and planned distributions.</span></div>
           <div class="fs-flow-node"><strong>05 · Project</strong><span>Compute seven-day supply under labeled assumptions.</span></div>
-          <div class="fs-flow-node"><strong>06 · Optimize</strong><span>Build a time-indexed recovery plan against safe supply.</span></div>
-          <div class="fs-flow-node fs-human"><strong>07 · Approve</strong><span>Stop for an operator before any plan-side effect.</span></div>
+          <div class="fs-flow-node"><strong>06 · Assess</strong><span>Optimize recovery only when exposure exists; otherwise preserve the baseline.</span></div>
+          <div class="fs-flow-node fs-human"><strong>07 · Review</strong><span>Stop for a person before any safety or plan-side effect.</span></div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1071,8 +1159,8 @@ def _technical_page(conn: sqlite3.Connection) -> None:
         <div class="fs-lanes">
           <section class="fs-lane language">
             <h3>Language layer</h3>
-            <p><strong>Best at ambiguity:</strong> extract entities from notices, normalize language, explain tradeoffs, and draft operator communications. Structured outputs must survive schema and verbatim-provenance checks.</p>
-            <p>The public demo is offline-safe: approved cached extractions and deterministic templates replace a network dependency without pretending to be a live model evaluation.</p>
+            <p><strong>Best at ambiguity:</strong> extract entities from narrative notices, explain tradeoffs, and draft operator communications. Structured outputs must survive schema and verbatim-provenance checks.</p>
+            <p>Official API records use deterministic field mapping instead of an LLM. Curated replays retain cached extraction and templates as an offline fallback without pretending to be a live model evaluation.</p>
           </section>
           <section class="fs-lane control">
             <h3>Deterministic control layer</h3>
@@ -1112,6 +1200,7 @@ def _technical_page(conn: sqlite3.Connection) -> None:
     with left:
         st.subheader("Implementation map")
         st.table(pd.DataFrame([
+            {"module": "incident_sources.py", "responsibility": "openFDA + FSIS source boundary"},
             {"module": "agent.py", "responsibility": "orchestration + event transcript"},
             {"module": "extraction.py", "responsibility": "schema + provenance boundary"},
             {"module": "engine.py", "responsibility": "resolution, propagation, projection, LP"},
@@ -1122,13 +1211,15 @@ def _technical_page(conn: sqlite3.Connection) -> None:
         st.subheader("Why this generalizes")
         st.markdown(
             """
-            The framework does not encode “onion recall” as its workflow. A demo
-            incident supplies a notice and a recovery market; the same agent, tools,
-            state machine, constraints, transcript, and approval contract run unchanged.
+            The framework does not encode “onion recall” as its workflow. It accepts
+            a real authority record or curated notice; the same agent, tools, state
+            machine, constraints, transcript, and human-control contract run unchanged.
+            Official incidents are compared honestly with synthetic operations, so zero
+            exposure is an expected result—not a reason to invent matching lots.
 
-            - **Biological hazard:** trace onions and recover produce commitments.
-            - **Cold-chain hazard:** quarantine frozen protein and source a verified replacement.
-            - **Allergen hazard:** isolate pasta and reroute allergen-compatible grain.
+            - **openFDA:** current ongoing food-enforcement events.
+            - **USDA FSIS:** recalls and public-health alerts, best-effort and independently cached.
+            - **Curated replay:** incident-aligned synthetic data for repeatable recovery demonstrations.
             """
         )
 
@@ -1143,8 +1234,10 @@ def _technical_page(conn: sqlite3.Connection) -> None:
         st.info("No run is loaded. Choose an incident and run the simulation from the sidebar.")
 
     st.caption(
-        "Demo boundary: synthetic operations, no client PII, no autonomous execution. "
-        "Model extraction accuracy is not claimed without a provenance-complete evaluation run."
+        "Trust boundary: official incidents may be live; operations remain synthetic, "
+        "with no client PII and no autonomous execution. API data still requires issuing-"
+        "authority verification, and model extraction accuracy is not claimed without a "
+        "provenance-complete evaluation run."
     )
 
 
@@ -1157,6 +1250,13 @@ def main() -> None:
     ready = _scenario_ready(conn)
     event_id = latest_event_id(conn) if ready else None
     active_incident = incident_for_event(event_id)
+    active_runtime_incident = st.session_state.get("active_runtime_incident")
+    if (
+        active_runtime_incident is not None
+        and active_runtime_incident.event_id != event_id
+    ):
+        active_runtime_incident = None
+    active_choice: IncidentChoice | None = active_runtime_incident or active_incident
 
     st.sidebar.markdown(
         """
@@ -1170,7 +1270,7 @@ def main() -> None:
           constrained recovery options, and a human-gated action plan.
         </div>
         <div class="fs-side-pills">
-          <span>Tool grounded</span><span>Offline safe</span><span>Human approved</span>
+          <span>Official feeds</span><span>Offline fallback</span><span>Human approved</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1183,52 +1283,118 @@ def main() -> None:
     st.sidebar.markdown('<div class="fs-side-section">Explore</div>',
                         unsafe_allow_html=True)
     nav_demo, nav_tech = st.sidebar.columns(2)
-    if nav_demo.button(
+    nav_demo.button(
         "Live demo",
         type="primary" if page == "demo" else "secondary",
         key="nav_demo",
-    ):
-        st.session_state.app_page = "demo"
-        st.rerun()
-    if nav_tech.button(
+        on_click=_set_app_page,
+        args=("demo",),
+    )
+    nav_tech.button(
         "Technical",
         type="primary" if page == "technical" else "secondary",
         key="nav_technical",
-    ):
-        st.session_state.app_page = "technical"
-        st.rerun()
+        on_click=_set_app_page,
+        args=("technical",),
+    )
 
     st.sidebar.divider()
     st.sidebar.markdown('<div class="fs-side-section">Choose an incident</div>',
                         unsafe_allow_html=True)
-    if "selected_incident_key" not in st.session_state:
-        st.session_state.selected_incident_key = (
-            active_incident.key if active_incident else DEFAULT_INCIDENT_KEY
-        )
-    selected_key = st.sidebar.selectbox(
-        "Incident to simulate",
-        list(INCIDENTS),
-        format_func=lambda key: INCIDENTS[key].selector_label,
-        key="selected_incident_key",
-        label_visibility="collapsed",
-    )
-    selected_incident = INCIDENTS[selected_key]
-    st.sidebar.markdown(
-        f"""
-        <div class="fs-incident-card">
-          <strong>{escape(selected_incident.title)}</strong>
-          <span>{escape(selected_incident.hazard)} · {escape(selected_incident.product)}</span><br>
-          <span>{escape(selected_incident.response_angle)}</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    source_mode = st.sidebar.selectbox(
+        "Incident source",
+        list(SOURCE_LABELS),
+        format_func=lambda key: SOURCE_LABELS[key],
+        key="incident_source_mode",
     )
 
+    selected_incident: IncidentChoice | None = None
+    selected_key: str | None = None
+    if source_mode == "demo":
+        if "selected_incident_key" not in st.session_state:
+            st.session_state.selected_incident_key = (
+                active_incident.key if active_incident else DEFAULT_INCIDENT_KEY
+            )
+        selected_key = st.sidebar.selectbox(
+            "Curated scenario",
+            list(INCIDENTS),
+            format_func=lambda key: INCIDENTS[key].selector_label,
+            key="selected_incident_key",
+        )
+        selected_incident = INCIDENTS[selected_key]
+        st.sidebar.markdown(
+            f"""
+            <div class="fs-incident-card">
+              <strong>{escape(selected_incident.title)}</strong>
+              <span>{escape(selected_incident.hazard)} · {escape(selected_incident.product)}</span><br>
+              <span>{escape(selected_incident.response_angle)}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        refresh_col, cache_col = st.sidebar.columns([1, 1.5])
+        refresh = refresh_col.button("Refresh feed", key=f"refresh_{source_mode}")
+        cache_col.caption("10-minute API cache")
+        if refresh:
+            _load_live_incidents.clear()
+        live_incidents, source_error = _load_live_incidents(source_mode)
+        if source_error:
+            st.sidebar.error(source_error)
+            st.sidebar.caption(
+                "This authority feed failed independently. Choose openFDA or a "
+                "curated demo; the rest of FoodShock remains available."
+            )
+        if live_incidents:
+            by_key = {incident.key: incident for incident in live_incidents}
+            live_widget_key = f"selected_{source_mode}_incident_key"
+            if st.session_state.get(live_widget_key) not in by_key:
+                st.session_state[live_widget_key] = live_incidents[0].key
+            selected_key = st.sidebar.selectbox(
+                "Official incident record",
+                list(by_key),
+                format_func=lambda key: by_key[key].selector_label,
+                key=live_widget_key,
+            )
+            selected_incident = by_key[selected_key]
+            st.sidebar.markdown(
+                f"""
+                <div class="fs-incident-card">
+                  <strong>{escape(selected_incident.title)}</strong>
+                  <span>{escape(selected_incident.authority)} ·
+                    {escape(selected_incident.classification)} ·
+                    {escape(selected_incident.status)}</span><br>
+                  <span>{escape(selected_incident.product_summary)}</span><br>
+                  <span>{escape(selected_incident.reason_summary)}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.sidebar.warning(selected_incident.trust_warning)
+            st.sidebar.caption(
+                f"Retrieved {selected_incident.retrieved_at}. The incident is real; "
+                "the food-bank inventory and purchase orders remain synthetic. "
+                "Zero exposure is a valid result."
+            )
+            st.sidebar.markdown(
+                f"[Open official source record]({selected_incident.source_url})"
+            )
+        else:
+            st.sidebar.info("No incidents are currently available from this feed.")
+
+    run_label = (
+        "Run curated simulation" if source_mode == "demo"
+        else "Analyze official incident"
+    )
     if st.sidebar.button(
-        "Run incident simulation",
+        run_label,
         type="primary",
-        help="Reset this session's synthetic network and animate the selected agent run",
+        help=(
+            "Reset this session's synthetic operations, ingest the selected incident, "
+            "and animate the bounded agent workflow"
+        ),
         key="run_incident",
+        disabled=selected_incident is None,
     ):
         try:
             result = _run_animated_replay(conn, selected_incident)
@@ -1238,17 +1404,28 @@ def main() -> None:
         st.session_state.replay_count = st.session_state.get("replay_count", 0) + 1
         st.session_state.last_replay_key = selected_key
         st.session_state.last_run_id = result.run_id
+        st.session_state.last_run_has_exposure = result.has_exposure
+        st.session_state.active_runtime_incident = selected_incident
         st.rerun()
 
     replay_count = st.session_state.get("replay_count", 0)
     last_replay_key = st.session_state.get("last_replay_key")
-    if replay_count and last_replay_key == selected_key:
-        st.sidebar.success(
-            f"Run {replay_count} complete. {selected_incident.title} is ready for review."
+    if selected_incident and replay_count and last_replay_key == selected_key:
+        outcome = (
+            "Exposure assessment ready."
+            if st.session_state.get("last_run_has_exposure")
+            else "No operational exposure found; zero-match assessment ready."
         )
-    elif active_incident and active_incident.key != selected_key:
+        st.sidebar.success(
+            f"Run {replay_count} complete. {outcome}"
+        )
+    elif (
+        selected_incident
+        and active_choice
+        and active_choice.key != selected_key
+    ):
         st.sidebar.info(
-            f"Current run: {active_incident.title}. Run the selection above to switch incidents."
+            f"Current run: {active_choice.title}. Run the selection above to switch incidents."
         )
 
     st.sidebar.markdown('<div class="fs-side-section">Display</div>',
@@ -1262,11 +1439,12 @@ def main() -> None:
 
     with st.sidebar.expander("Project and demo disclosures"):
         st.markdown(
-            "- **Framework:** bounded orchestration over explicit tools\n"
-            "- **Data:** synthetic operations; no client PII\n"
-            "- **Language layer:** cached extraction/templates in public demo\n"
-            "- **Control:** deterministic matching, projection, optimization\n"
-            "- **Execution:** no plan action without operator approval"
+            "- **Incident source:** official API record or curated replay\n"
+            "- **Operations:** synthetic inventory, POs, demand, and recovery market\n"
+            "- **Source boundary:** APIs never manufacture operational matches\n"
+            "- **Language layer:** structured API mapping or cached notice extraction\n"
+            "- **Control:** deterministic matching, projection, and optimization\n"
+            "- **Execution:** no food-safety or plan action without human review"
         )
     with st.sidebar.expander("Runtime details"):
         st.caption(
@@ -1277,6 +1455,7 @@ def main() -> None:
             "Language layer: "
             + ("live model allowed" if ALLOW_LLM else "offline cache/template")
         )
+        st.caption("Authority APIs use deterministic field mapping with provenance checks.")
 
     if page == "technical":
         _technical_page(conn)
@@ -1301,19 +1480,44 @@ def main() -> None:
         return
 
     active_incident = incident_for_event(event_id)
+    active_runtime_incident = st.session_state.get("active_runtime_incident")
+    if (
+        active_runtime_incident is not None
+        and active_runtime_incident.event_id == event_id
+    ):
+        active_choice = active_runtime_incident
+    else:
+        active_choice = active_incident
     eyebrow = f"Active incident · {event_id}"
-    subtitle = (
-        active_incident.response_angle
-        if active_incident
-        else "Trace exposure, quantify seven-day supply risk, and review a feasible recovery plan."
-    )
-    if active_incident:
-        eyebrow += f" · {active_incident.hazard}"
+    if isinstance(active_choice, DemoIncident):
+        subtitle = active_choice.response_angle
+        eyebrow += f" · {active_choice.hazard}"
+    elif isinstance(active_choice, LiveIncident):
+        subtitle = (
+            f"{active_choice.reason_summary} Official incident evidence is matched "
+            "against a clearly labeled synthetic food-bank network."
+        )
+        eyebrow += f" · {active_choice.classification}"
+    else:
+        subtitle = (
+            "Trace exposure, quantify seven-day supply risk, and review the "
+            "human-gated assessment."
+        )
     _hero(
         eyebrow,
         "Recall response command center",
         subtitle,
     )
+    if isinstance(active_choice, LiveIncident):
+        st.warning(
+            f"**Live authority incident · synthetic operations.** "
+            f"{active_choice.trust_warning}"
+        )
+        st.caption(
+            f"Retrieved {active_choice.retrieved_at} from "
+            f"[{active_choice.source_label}]({active_choice.source_url}). "
+            "The source did not supply or confirm any displayed inventory or PO record."
+        )
 
     run_id = _latest_run_id(conn)
     if run_id:

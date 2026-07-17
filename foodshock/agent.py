@@ -24,7 +24,7 @@ import pandas as pd
 from .db import insert, now_iso, rows
 from .engine import (before_after, build_plans, days_of_supply,
                      incident_focus, project_supply, propagate, resolve_event)
-from .extraction import ExtractionUnavailable, extract_notice
+from .extraction import ExtractionUnavailable, extract_notice, verify_provenance
 from .narrate import narrate
 from .schemas import SCENARIOS, RecallExtraction
 
@@ -48,6 +48,7 @@ class AgentRunResult:
     narration_method: str
     runtime_s: float
     gaps: list[str] = field(default_factory=list)
+    has_exposure: bool = True
 
 
 class RecallResponseAgent:
@@ -105,7 +106,9 @@ class RecallResponseAgent:
     # ---------------------------------------------------------------- run
 
     def run(self, raw_text: str, *, source_url: str | None = None,
-            event_id: str | None = None) -> AgentRunResult:
+            event_id: str | None = None, published_at: str | None = None,
+            provided_extraction: RecallExtraction | None = None,
+            provided_extraction_method: str = "source-api") -> AgentRunResult:
         t0 = time.perf_counter()
         self.gaps: list[str] = []
         self._observer_s = 0.0
@@ -119,13 +122,28 @@ class RecallResponseAgent:
                    "method": "template"})
         self._tool("observe", "ingest_notice",
                    {"event_id": event_id, "chars": len(raw_text)},
-                   lambda: self._ingest(event_id, raw_text, source_url))
+                   lambda: self._ingest(event_id, raw_text, source_url, published_at))
 
-        # --------------------------------------------------- INVESTIGATE
+        # Structured authority APIs already provide typed fields. They enter
+        # through the same provenance guard, but do not need an LLM to
+        # reinterpret their JSON fields.
         try:
-            extraction, ext_method, dropped = self._tool(
-                "investigate", "extract_notice", {"event_id": event_id},
-                lambda: extract_notice(raw_text, allow_llm=self.allow_llm))
+            if provided_extraction is None:
+                extraction, ext_method, dropped = self._tool(
+                    "investigate", "extract_notice", {"event_id": event_id},
+                    lambda: extract_notice(raw_text, allow_llm=self.allow_llm))
+            else:
+                def source_extract():
+                    verified, dropped_fields = verify_provenance(
+                        provided_extraction, raw_text
+                    )
+                    return verified, provided_extraction_method, dropped_fields
+
+                extraction, ext_method, dropped = self._tool(
+                    "investigate", "extract_notice",
+                    {"event_id": event_id, "method": provided_extraction_method},
+                    source_extract,
+                )
         except ExtractionUnavailable as exc:
             self._gap("investigate", f"Extraction unavailable: {exc} "
                                      "Incident needs manual entity entry.")
@@ -176,6 +194,7 @@ class RecallResponseAgent:
                 self._gap("investigate",
                           f"{m['target_type']} {m['target_id']}: {m['state']} match "
                           f"(tier {m['tier']}) needs human review before any release.")
+        has_exposure = any(m["state"] != "not_matched" for m in matches)
         focus = incident_focus(self.conn, event_id)
 
         propagation = self._tool("investigate", "propagate", {"event_id": event_id},
@@ -188,9 +207,12 @@ class RecallResponseAgent:
                               lambda s=scenario: project_supply(self.conn, s))
             dos[scenario] = days_of_supply(proj)
 
-        baseline_id, rec_id = self._tool("explain", "optimize_recovery",
-                                         {"objective": "weighted LP, conservative pool"},
-                                         lambda: build_plans(self.conn))
+        baseline_id, rec_id = self._tool(
+            "explain", "optimize_recovery",
+            {"objective": "weighted LP, conservative pool",
+             "recovery_enabled": has_exposure},
+            lambda: build_plans(self.conn, recovery_enabled=has_exposure),
+        )
         runtime_s = round(max(0.0, time.perf_counter() - t0 - self._observer_s), 2)
         ba = self._tool("explain", "before_after",
                         {"baseline": baseline_id, "recommended": rec_id,
@@ -201,6 +223,7 @@ class RecallResponseAgent:
 
         facts = {
             "event_id": event_id, "authority": extraction.authority,
+            "has_exposure": has_exposure,
             "hazard": extraction.pathogen,
             "recalled_products": extraction.products,
             "match_counts (lots and purchase orders, by state)": match_counts,
@@ -227,12 +250,22 @@ class RecallResponseAgent:
                                                _explain_template(facts))
 
         # ------------------------------------------------------- APPROVE
+        if has_exposure:
+            approval_text = (
+                f"Recommended plan {rec_id} and do-nothing baseline "
+                f"{baseline_id} are ready in the approval queue with "
+                f"{len(self.gaps)} open review gap(s). No quarantine, purchase, "
+                "or allocation executes without operator approval."
+            )
+        else:
+            approval_text = (
+                "No evidence-linked exposure was found in the current operational "
+                "records, so no recall-triggered quarantine or recovery action is "
+                "recommended. The unchanged network baseline remains visible for "
+                "context; source verification and human review still apply."
+            )
         self._log("approve", "narration", "request_approval",
-                  {"text": f"Recommended plan {rec_id} and do-nothing baseline "
-                           f"{baseline_id} are ready in the approval queue with "
-                           f"{len(self.gaps)} open review gap(s). No quarantine, purchase, "
-                           "or allocation executes without operator approval.",
-                   "method": "template"})
+                  {"text": approval_text, "method": "template"})
 
         return AgentRunResult(
             run_id=self.run_id, event_id=event_id, extraction=extraction,
@@ -240,14 +273,17 @@ class RecallResponseAgent:
             match_counts=match_counts, propagation=propagation, days_of_supply=dos,
             baseline_id=baseline_id, recommended_id=rec_id, before_after=ba,
             narration=narration, narration_method=narr_method,
-            runtime_s=runtime_s, gaps=self.gaps)
+            runtime_s=runtime_s, gaps=self.gaps, has_exposure=has_exposure)
 
-    def _ingest(self, event_id: str, raw_text: str, source_url: str | None) -> dict:
+    def _ingest(self, event_id: str, raw_text: str, source_url: str | None,
+                published_at: str | None) -> dict:
         insert(self.conn, "recall_events", {
             "event_id": event_id, "authority": "UNKNOWN", "status": "active",
-            "ingested_at": now_iso(), "source_url": source_url, "raw_text": raw_text})
+            "published_at": published_at, "ingested_at": now_iso(),
+            "source_url": source_url, "raw_text": raw_text})
         self.conn.commit()
-        return {"event_id": event_id, "status": "ingested"}
+        return {"event_id": event_id, "status": "ingested",
+                "published_at": published_at}
 
 
 def _last_word(term: str) -> str:
@@ -270,6 +306,19 @@ def _explain_template(facts: dict) -> str:
 
     def fmt_dos(v):
         return "beyond the 7-day horizon" if v is None else f"{v} days"
+
+    if not facts["has_exposure"]:
+        return (
+            f"{facts['authority']} incident {facts['event_id']}"
+            f"{' (' + facts['hazard'] + ')' if facts['hazard'] else ''} produced "
+            "no evidence-linked lot or inbound-order matches in the current "
+            "operational records. No recall-triggered quarantine, purchase-order "
+            "hold, or recovery action is indicated. The unchanged network baseline "
+            f"serves {base['served_lb']:g} lb with {base['unmet_demand_lb']:g} lb "
+            "of pre-existing unmet demand; it is context, not incident impact. "
+            "Verify the authority source and keep food-safety decisions under "
+            "human review."
+        )
 
     return (
         f"{facts['authority']} recall {facts['event_id']}"

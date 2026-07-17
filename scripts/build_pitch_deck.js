@@ -204,7 +204,7 @@ async function build() {
 
     const flowX = [8.45, 9.55, 10.65, 11.75];
     const flow = [
-      ['NOTICE', 'extract'],
+      ['NOTICE', 'live authority'],
       ['TRACE', 'lots + POs'],
       ['REPLAN', 'LP + FEFO'],
       ['APPROVE', 'human gate'],
@@ -222,9 +222,9 @@ async function build() {
     addMetricCard(slide, 11.45, 3.55, 1.3, 1.45, '0', 'violations', C.aqua, 'hard constraints');
     addPill(slide, 'LIVE DEMO', 8.45, 5.55, 1.1, C.coral);
     addText(slide, 'foodshock.sebastianalexis.com', 9.72, 5.53, 3.02, 0.35, { fontSize: 10.5, bold: true, color: C.paper, hyperlink: { url: appUrl } });
-    addText(slide, 'Synthetic operations data. No client PII. No operator validation claimed.', 0.72, 6.92, 6.9, 0.25, { fontSize: 9, color: C.aqua });
+    addText(slide, 'Live FDA/USDA incidents. Synthetic food-bank operations. No client PII.', 0.72, 6.92, 7.4, 0.25, { fontSize: 9, color: C.aqua });
     addText(slide, '1', 12.52, 7.03, 0.24, 0.2, { fontSize: 8, color: C.aqua, align: 'right' });
-    addNotes(slide, 'FoodShock is a decision-support command center for food-bank recall response. The core promise is not autonomous execution: it is faster, traceable analysis ending at a human approval gate. All operational data in this demonstration is synthetic.');
+    addNotes(slide, 'FoodShock is a decision-support command center for food-bank recall response. Current openFDA and USDA FSIS incidents enter through official APIs, while inventory, purchase orders, demand, and recovery offers remain synthetic. The system ends at a human approval gate and exposes no action when an authority incident has no linked lot or purchase order.');
   }
 
   // 2 — Why now
@@ -308,11 +308,11 @@ async function build() {
   {
     const slide = pptx.addSlide('FOODSHOCK');
     addTitle(slide, 'Agentic analysis. Deterministic execution boundary.', 'System');
-    addText(slide, 'The agent gathers and explains evidence. Typed tools, state projection, optimization, and approval checks decide what is feasible and what may execute.', 0.72, 1.72, 11.7, 0.58, { fontSize: 16, color: C.muted, valign: 'top' });
+    addText(slide, 'Current openFDA and FSIS incidents cross a provenance-verified source boundary before the agent joins them to synthetic operations. Zero linked lots or POs means zero exposure and no approval action.', 0.72, 1.72, 11.7, 0.66, { fontSize: 15, color: C.muted, valign: 'top' });
 
     addText(slide, 'AGENT LOOP', 0.72, 2.55, 1.28, 0.25, { fontSize: 10, bold: true, charSpacing: 1.1, color: C.coral });
     const loop = [
-      ['Observe', 'notice + state'],
+      ['Observe', 'official feed + state'],
       ['Extract', 'typed fields'],
       ['Trace', 'graph joins'],
       ['Project', '7-day service'],
@@ -345,22 +345,23 @@ async function build() {
 
     addCard(slide, 9.98, 2.55, 2.65, 3.61, { fill: C.mist, line: C.line, shadow: false });
     addText(slide, 'Boring stack, on purpose', 10.28, 2.87, 2.05, 0.32, { fontSize: 13.5, bold: true });
-    addCheckRow(slide, 10.28, 3.44, 2.05, 'SQLite', 'auditable incident state');
-    addCheckRow(slide, 10.28, 4.13, 2.05, 'NetworkX', 'recall-to-pantry lineage');
+    addCheckRow(slide, 10.28, 3.44, 2.05, 'openFDA + FSIS', 'live authority incidents');
+    addCheckRow(slide, 10.28, 4.13, 2.05, 'SQLite + NetworkX', 'auditable state + lineage');
     addCheckRow(slide, 10.28, 4.82, 2.05, 'Linear program', 'feasible recovery plan');
     addCheckRow(slide, 10.28, 5.51, 2.05, 'Streamlit', 'review and approval UI', C.coral);
     addSourceFooter(slide, [
-      { label: 'Architecture and source', url: `${repoUrl}#readme` },
+      { label: 'Technical architecture', url: `${repoUrl}/blob/main/PLAN.md#7-technical-architecture` },
+      { label: 'Official source adapters', url: `${repoUrl}/blob/main/foodshock/incident_sources.py` },
       { label: 'Approval implementation', url: `${repoUrl}/blob/main/foodshock/engine.py` },
-    ], 'LLM narration can be cached/template-only; execution safety does not depend on free-form text.');
-    addNotes(slide, 'The architectural boundary is deliberate: language-model output cannot directly mutate inventory or approve a plan. Approval revalidates plan identity, payload integrity, and hard constraints inside the state layer.');
+    ], 'Authority incidents are real; operational records and computed impacts remain synthetic.');
+    addNotes(slide, 'The architectural boundary is deliberate. Each authority feed fails independently. Structured API fields are verified against the retained normalized source snapshot, and malformed fields cannot become operational facts. Language-model output cannot mutate inventory or approve a plan; approval revalidates identity, payload integrity, and hard constraints inside the state layer.');
   }
 
   // 5 — Exposure proof
   {
     const slide = pptx.addSlide('FOODSHOCK');
     addTitle(slide, 'Every claim can be traced back to evidence.', 'Product proof');
-    addText(slide, 'The exposure view pairs typed incident facts with verbatim source excerpts, then follows exact lot and purchase-order lineage into the operating network.', 0.72, 1.72, 11.7, 0.55, { fontSize: 15.5, color: C.muted, valign: 'top' });
+    addText(slide, 'The curated positive-exposure view pairs typed incident facts with verbatim source excerpts and exact operational lineage. Live API incidents use the same evidence contract and can stop honestly at zero exposure.', 0.72, 1.72, 11.7, 0.55, { fontSize: 15.2, color: C.muted, valign: 'top' });
 
     addCard(slide, 0.72, 2.48, 8.55, 4.15, { fill: C.paper, line: C.line, shadow: false });
     slide.addImage({
@@ -371,15 +372,15 @@ async function build() {
 
     addCard(slide, 9.62, 2.48, 3.0, 4.15, { fill: C.mist, line: C.teal, shadow: false });
     addText(slide, 'Evidence contract', 9.96, 2.84, 2.25, 0.32, { fontSize: 15, bold: true, color: C.ink });
-    addCheckRow(slide, 9.96, 3.4, 2.25, 'Original notice retained', 'raw text remains inspectable', C.teal);
+    addCheckRow(slide, 9.96, 3.4, 2.25, 'Source snapshot retained', 'input remains inspectable', C.teal);
     addCheckRow(slide, 9.96, 4.14, 2.25, 'Field-level quote', 'each value has supporting text', C.teal);
     addCheckRow(slide, 9.96, 4.88, 2.25, 'Unsupported value dropped', 'verifier removes weak provenance', C.coral);
     addCheckRow(slide, 9.96, 5.62, 2.25, 'Exact operational join', 'lot or inbound PO drives impact', C.teal);
     addSourceFooter(slide, [
       { label: 'Live exposure queue', url: appUrl },
       { label: 'Extraction verifier', url: `${repoUrl}/blob/main/foodshock/extraction.py` },
-    ], 'Screenshot captured from the public synthetic-data demo.');
-    addNotes(slide, 'The screenshot is not a mockup. It is the public Streamlit deployment. Verbatim excerpts remain alongside structured fields so a reviewer can challenge extraction before acting.');
+    ], 'Screenshot: curated positive-exposure fallback. Live authority incidents use the same provenance contract.');
+    addNotes(slide, 'The screenshot is not a mockup; it is the public Streamlit application running the deterministic positive-exposure fallback. Current openFDA and USDA FSIS records retain the same field-level provenance, authority warning, retrieval time, and source link. If no synthetic lot or purchase order joins to that real incident, FoodShock presents an explicit no-exposure result instead of manufacturing a recovery action.');
   }
 
   // 6 — Results
@@ -463,12 +464,12 @@ async function build() {
     const cols = [
       {
         x: 0.72, fill: C.mist, line: C.teal, tag: 'MEASURED', tagColor: C.teal,
-        title: 'In the synthetic demo',
+        title: 'Implemented + measured',
         items: [
-          ['1.20s', 'latest seeded run'],
+          ['2 feeds', 'on-demand openFDA + FSIS'],
+          ['78 tests', 'deterministic regression suite'],
           ['0', 'hard-constraint violations'],
-          ['+1,800 lb', 'served vs baseline'],
-          ['64 tests', 'deterministic regression suite'],
+          ['+1,800 lb', 'curated recovery vs baseline'],
         ],
       },
       {
@@ -509,7 +510,7 @@ async function build() {
       { label: 'Evaluation runner', url: `${repoUrl}/blob/main/foodshock/eval_extraction.py` },
       { label: 'Safety tests', url: `${repoUrl}/tree/main/tests` },
     ], 'Published evidence is a fallback for discovery, not a substitute for operator interviews.');
-    addNotes(slide, 'The deck does not report extraction accuracy because a valid Anthropic credential was unavailable. The gold set and scorer are committed so the run can be reproduced once access exists. The operational results are also explicitly synthetic and not operator-validated.');
+    addNotes(slide, 'The live source adapters retrieve current openFDA and USDA FSIS records, but an authority record is not evidence that the synthetic network is exposed. The deck does not report extraction accuracy because a valid Anthropic credential was unavailable. The gold set and scorer are committed for a reproducible future run. Operational outcomes remain synthetic and are not operator-validated.');
   }
 
   // 9 — Close
@@ -542,8 +543,8 @@ async function build() {
     addText(slide, 'foodshock.sebastianalexis.com', 8.45, 4.42, 3.72, 0.34, { fontSize: 12.5, bold: true, align: 'center', color: C.teal, hyperlink: { url: appUrl } });
     addText(slide, 'Source code', 8.45, 5.12, 1.2, 0.26, { fontSize: 10, bold: true, color: C.muted });
     addText(slide, 'github.com/Sebastian-Alexis/\nai_supplychain_foodbank', 9.58, 5.09, 2.55, 0.52, { fontSize: 10.2, color: C.teal, hyperlink: { url: repoUrl }, breakLine: true });
-    addPill(slide, 'SYNTHETIC DATA', 8.45, 6.05, 1.45, C.coral);
-    addText(slide, 'No client PII. Human approval required.', 10.08, 6.04, 2.05, 0.31, { fontSize: 9.5, color: C.muted });
+    addPill(slide, 'LIVE FEEDS · SYNTHETIC OPS', 8.45, 6.05, 2.5, C.teal);
+    addText(slide, 'Human gate required.', 11.12, 6.04, 1.12, 0.31, { fontSize: 9.2, color: C.muted });
 
     addText(slide, [
       { text: 'Sources: ', options: { bold: true, color: C.aqua } },
@@ -558,7 +559,7 @@ async function build() {
       { text: 'RI Food Bank', options: { color: C.paper, hyperlink: { url: 'https://rifoodbank.org/wp-content/uploads/2023/06/Food-Safety-Recall-Process-doc.pdf' } } },
     ], 0.72, 6.94, 6.65, 0.25, { fontSize: 8.5, color: C.aqua });
     addText(slide, '9', 12.52, 7.03, 0.24, 0.2, { fontSize: 8, color: C.aqua, align: 'right' });
-    addNotes(slide, 'The proposed next step is a bounded shadow pilot. The goal is to validate the workflow and evidence loop with operators before making impact claims. The public demo and source code are available from this slide.');
+    addNotes(slide, 'The proposed next step is a bounded shadow pilot. The public command center already accepts current openFDA and USDA FSIS incidents while keeping food-bank operations synthetic. The goal of a pilot is to connect real operational records and validate the evidence loop with operators before making impact claims.');
   }
 
   validateBounds();

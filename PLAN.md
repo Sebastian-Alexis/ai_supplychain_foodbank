@@ -89,7 +89,7 @@ Primary user: a food-bank supply-chain or procurement coordinator responsible fo
 ### Hackathon MVP — one complete disruption-response loop
 
 1. Load synthetic inventory, suppliers, POs, pantry demand, and capacity data (SQLite).
-2. Replay a canned E. coli recall notice (real API polling is a stretch goal).
+2. Fetch a recent openFDA or USDA FSIS incident on demand, with the curated E. coli notice as a deterministic offline fallback.
 3. Agent extracts structured recall entities with source excerpts and confidence.
 4. Agent matches the notice against lot-level inventory and inbound orders via tools.
 5. Deterministic 7-day inventory projection per category. Confirmed recalled lots and confirmed-canceled POs are excluded from every run, unconditionally. Only unconfirmed items (probable/possible matches, at-risk POs) are toggled, as labeled scenario assumptions.
@@ -103,7 +103,7 @@ Primary user: a food-bank supply-chain or procurement coordinator responsible fo
 - Temporal/bitemporal graph machinery — replaced by provenance fields on event records.
 - Embedding-based entity resolution (tiers 1–4 + human review only).
 - Pareto plan sets — one recommended plan vs. do-nothing baseline.
-- Live API polling, Neo4j, streaming updates.
+- Scheduled polling/alerts, Neo4j, and streaming updates.
 
 ### Explicit non-goals (unchanged)
 
@@ -116,11 +116,13 @@ Primary user: a food-bank supply-chain or procurement coordinator responsible fo
 
 ## 6. Data Sources
 
-### Public safety signals (canned/replayed for the demo)
+### Public safety signals (live authority feeds + curated fallback)
 
-- CDC multistate foodborne outbreak notices: <https://www.cdc.gov/foodborne-outbreaks/outbreaks/index.html>
-- openFDA food enforcement: <https://open.fda.gov/apis/food/enforcement/>
-- USDA FSIS Recall API: <https://www.fsis.usda.gov/science-data/developer-resources/recall-api>
+- openFDA food enforcement: <https://open.fda.gov/apis/food/enforcement/> — fetched on demand. The API labels its results unvalidated, so FoodShock retains the source record, displays a verification warning, and links back to the authority.
+- USDA FSIS Recall API: <https://www.fsis.usda.gov/science-data/developer-resources/recall-api> — fetched on demand through an independently isolated adapter.
+- CDC multistate foodborne outbreak notices: <https://www.cdc.gov/foodborne-outbreaks/outbreaks/index.html> — source material for curated outbreak analogues; not polled in the MVP.
+
+The UI caches each provider result or failure for 10 minutes. A timeout, malformed record, or unavailable feed cannot disable the other authority feed or the curated fallback.
 
 ### Food-bank operational data
 
@@ -133,36 +135,42 @@ No individual client records, names, addresses, or PII. Demand aggregated by pan
 ## 7. Technical Architecture
 
 ```text
-                    ┌──────────────────────────────────┐
-                    │        RecallResponseAgent       │
-                    │  observe → investigate → explain │
-                    │        → request approval        │
-                    └──┬────────┬────────┬────────┬────┘
-             tool calls│        │        │        │
-        ┌──────────────┘        │        │        └──────────────┐
-        ▼                       ▼        ▼                       ▼
-┌───────────────┐   ┌────────────────┐  ┌───────────────┐  ┌───────────────┐
-│ extract_notice│   │ query_inventory│  │ project_supply│  │ optimize_     │
-│ (LLM + schema │   │ query_pos      │  │ (deterministic│  │ recovery (LP) │
-│  validation)  │   │ resolve_entity │  │  7-day table) │  │ draft_comms   │
-└───────┬───────┘   └───────┬────────┘  └───────┬───────┘  └───────┬───────┘
-        └───────────────────┴───────┬───────────┴──────────────────┘
-                                    ▼
-                     ┌─────────────────────────────┐
-                     │ SQLite (system of record)   │
-                     │ NetworkX lineage (derived,  │
-                     │ for graph view only)        │
-                     └──────────────┬──────────────┘
-                                    ▼
-                     ┌─────────────────────────────┐
-                     │ Streamlit dashboard +       │
-                     │ approval queue + map/graph  │
-                     └─────────────────────────────┘
+┌──────────────┐   ┌──────────────┐   ┌────────────────┐
+│ openFDA API  │   │ USDA FSIS API│   │ curated notice │
+└──────┬───────┘   └──────┬───────┘   └───────┬────────┘
+       └──────────────┬────┴───────────────────┘
+                      ▼
+        ┌──────────────────────────────────────┐
+        │ Incident source boundary             │
+        │ deterministic mapping + provenance   │
+        │ independent failure isolation        │
+        └──────────────────┬───────────────────┘
+                           ▼
+        ┌──────────────────────────────────────┐
+        │ RecallResponseAgent                  │
+        │ observe → investigate → explain      │
+        │ → request approval only if exposed   │
+        └────┬────────┬──────────┬─────────┬───┘
+             │        │          │         │ tool calls
+             ▼        ▼          ▼         ▼
+       extract /   inventory  7-day     recovery LP /
+       verify       + PO join  projection communications
+             └────────┴────┬─────┴─────────┘
+                           ▼
+        ┌──────────────────────────────────────┐
+        │ SQLite system of record              │
+        │ NetworkX lineage (derived view only) │
+        └──────────────────┬───────────────────┘
+                           ▼
+        ┌──────────────────────────────────────┐
+        │ Streamlit review + approval UI       │
+        └──────────────────────────────────────┘
 ```
 
 ### Committed stack (decided, not optional)
 
 - Python; SQLite; Pydantic for validated records
+- On-demand openFDA and USDA FSIS adapters with deterministic source-field mapping, provenance verification, and independent failure isolation
 - PuLP for the recovery LP (greedy heuristic fallback)
 - NetworkX only to build the lineage graph for visualization
 - Streamlit for the dashboard; pydeck/Plotly for the map view
@@ -343,12 +351,12 @@ Five views:
 
 ## 14. Demonstration (3-minute arc)
 
-1. **Alert lands** — narrative notice ingested; agent transcript starts.
-2. **Exposure in 60 seconds** — extraction with cited excerpts; confirmed lot + ambiguous records in the queue; graph view shows the lineage.
-3. **Approve the plan** — projection table, recommended plan (conservative pool only, §11) vs. baseline, operator approves, comms drafted.
-4. **Before/after numbers** — measured response-planning runtime vs. the explicitly hypothetical 2.0 staff-hour task model in §2; never present the comparator as observed operator performance.
+1. **Official alert lands** — select a current openFDA or FSIS incident; the normalized source snapshot, retrieval time, trust warning, and authority link remain visible.
+2. **Evidence join** — the agent maps cited source fields and checks exact lot and purchase-order lineage. A real incident with no linked operational record is reported as zero exposure, with no quarantine, hold, recovery plan, or communications.
+3. **Positive-exposure path** — replay the curated E. coli analogue to show the deterministic exposure queue, seven-day projection, and recommended recovery plan.
+4. **Approve only when warranted** — the operator reviews the positive-exposure plan, approves it, and receives scoped draft communications. The no-exposure path exposes no approval action.
 
-Anchor the scenario to the real 2024 onion E. coli recall as an analogue (verified citation, §2). All displayed metrics are computed by the implementation; all synthetic data and estimates are labeled.
+The positive-exposure fallback is anchored to the real 2024 onion E. coli recall as an analogue (verified citation, §2). Authority incidents are real; inventory, purchase orders, demand, and every displayed operational impact remain synthetic and are labeled as such.
 
 ### Initial state
 
@@ -356,7 +364,7 @@ One regional food bank (public-data-inspired scale, per §3 labeling rule), two 
 
 ### Deliverable shown to judges
 
-- **Primary: live demo** — the Streamlit app in a browser, driven from the presenter's laptop and projected. SQLite + canned notice replay run offline; the one network dependency (LLM extraction call) is cached for the demo notice so the full arc replays with zero network.
+- **Primary: live demo** — the Streamlit app fetches openFDA or FSIS incidents on demand and joins them only to the clearly labeled synthetic food-bank network. A zero-match incident ends in an explicit no-exposure/no-action result. The curated notice remains the deterministic offline fallback for the complete positive-exposure and approval arc; local SQLite and cached/template extraction keep that fallback network-independent.
 - **Shareable URL as take-away** — deploy the same app to Streamlit Community Cloud from the repo; if the deploy succeeds, judges get a clickable link for their own devices. The onsite demo never depends on it.
 - **Slide deck** (problem quantification, Gate 0 evidence, architecture, computed results) + **fallback screen recording** of the working demo.
 
@@ -378,13 +386,14 @@ Human-factors bar (checked manually): operator can see why each lot matched, dis
 4. Recovery LP + before/after metrics.
 
 **Phase B — agent + extraction:**
-5. Wrap tools in the RecallResponseAgent loop; live transcript panel.
-6. LLM extraction with schema validation and excerpts; tiers 3–4; flag_gap review routing.
+5. Add independently isolated openFDA and FSIS adapters with deterministic, provenance-verified source-field mapping.
+6. Wrap source intake and operational tools in the RecallResponseAgent loop; show the live transcript and honest zero-exposure path.
+7. Keep schema-validated LLM extraction with excerpts for free-form/curated notices; tiers 3–4 route ambiguous joins to `flag_gap`.
 
 **Phase C — presentation:**
-7. Graph and map views.
-8. Approval flow + drafted communications + audit record.
-9. Pitch deck finalized; fallback screen recording; timed rehearsal of the 3-minute arc.
+8. Graph and map views.
+9. Approval flow + drafted communications + audit record.
+10. Pitch deck finalized; fallback screen recording; timed rehearsal of both the live-source and positive-exposure paths.
 
 Later phases must not compromise the working vertical slice.
 
@@ -394,7 +403,7 @@ Later phases must not compromise the working vertical slice.
 - Temporal/bitemporal event history and superseding-notice handling
 - Embedding-based resolution tier + calibration dashboard
 - Pareto plan alternatives (low-cost / most-meals / most-equitable)
-- Live FDA/USDA polling; streaming recalculation; Neo4j exploration
+- Scheduled FDA/USDA polling or push alerts; streaming recalculation; Neo4j exploration
 - Additional disruption types; mutual-aid matching; backhaul-aware routing
 
 ## 18. Team Split
@@ -410,13 +419,13 @@ Later phases must not compromise the working vertical slice.
 - **AI invents missing lot/supplier data** → required source excerpts, schema validation, nulls for unknowns, deterministic identifier checks.
 - **Unvalidated domain assumptions in the pitch** → §3 rule: interview quote or citation, or the claim is cut. Domain hypotheses (e.g., donation-stream traceability) stay questions until validated.
 - **Scope kills the demo** → Phase A gate; Monte Carlo/temporal/embeddings are stretch by construction.
-- **Demo-day network failure** → canned notice replay, local SQLite, fallback screen recording.
+- **Demo-day network or provider failure** → independently cached feed failures, curated notice replay, local SQLite, fallback screen recording.
 - **Synthetic data feels arbitrary** → public-data-inspired scale with citations; every metric computed from reproducible inputs.
 
 ## 20. Judging Narrative
 
 - **Problem (grounded):** open with the published-evidence fallback; quantify recall frequency and show the food-bank recall workflow. Label the 2.0 staff-hour comparator as a hypothetical task model, not measured performance.
-- **Solution (agentic):** the RecallResponseAgent loop, shown as a live tool-call transcript — observe, investigate, explain, request approval.
+- **Solution (agentic):** current authority incidents enter through provenance-verified adapters; the RecallResponseAgent transcript then shows observe, investigate, explain, and—only when exposure exists—request approval.
 - **Human value:** measured notice-to-draft runtime under one minute in the synthetic scenario versus the transparent 2.0 staff-hour internal task model, with food-safety and allocation decisions under human control.
 - **Logistics:** onsite presenter confirmed; deck done the night before; fallback recording ready.
 
