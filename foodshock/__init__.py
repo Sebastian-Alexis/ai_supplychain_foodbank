@@ -1,4 +1,4 @@
-"""FoodShock: food-bank supply shock radar (AISCO hackathon MVP).
+"""Farms for Food: food-bank supply shock radar (AISCO hackathon MVP).
 
 Pipeline: canned recall notice -> agent extraction -> entity resolution ->
 disruption propagation -> deterministic 7-day projection -> recovery LP ->

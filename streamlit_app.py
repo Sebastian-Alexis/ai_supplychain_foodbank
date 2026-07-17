@@ -1,4 +1,4 @@
-"""FoodShock Streamlit app (PLAN.md §13): the five operator views.
+"""Farms for Food Streamlit app (PLAN.md §13): the five operator views.
 
 1. Exposure queue    -- match states + evidence + clearance actions
 2. Impact dashboard  -- match-state inventory, POs at risk, 7-day projection
@@ -43,14 +43,14 @@ from foodshock.engine import (BOX_LB, HORIZON_DAYS, approve_plan, build_plans,
 from foodshock.extraction import ExtractionUnavailable
 from foodshock.incident_sources import (
     FSIS_WARNING, OPENFDA_WARNING, IncidentSourceError, LiveIncident,
-    fetch_live_incidents,
+    fetch_live_incidents, parse_source_snapshot,
 )
 from foodshock.schemas import SCENARIO_LABELS, SCENARIOS
 from foodshock.viz import (STATE_COLORS, graph_figure, latest_event_id,
                            latest_plan_ids, lineage_graph, map_arcs, map_deck,
                            map_points)
 
-st.set_page_config(page_title="FoodShock | Agentic response framework", layout="wide")
+st.set_page_config(page_title="Farms for Food | Agentic response framework", layout="wide")
 
 ALLOW_LLM = os.environ.get("FOODSHOCK_LIVE_LLM", "") == "1"
 OPERATOR = "operator (streamlit)"
@@ -586,7 +586,7 @@ def _gaps(conn, run_id: str) -> list[str]:
 def view_exposure(conn, event_id: str) -> None:
     ev = rows(conn, "SELECT * FROM recall_events WHERE event_id=?", (event_id,))[0]
     ext = json.loads(ev["extraction_json"]) if ev["extraction_json"] else {}
-    source_api = (ev["extraction_method"] or "").endswith("-api")
+    source_api = (ev["extraction_method"] or "").split("+", 1)[0].endswith("-api")
     if source_api:
         warning = OPENFDA_WARNING if ev["authority"] == "FDA" else FSIS_WARNING
         st.warning(
@@ -599,24 +599,58 @@ def view_exposure(conn, event_id: str) -> None:
             f"**Published:** {published} · "
             f"[Open official source record]({ev['source_url']})"
         )
+        overview, source_records = parse_source_snapshot(ev["raw_text"])
+        st.subheader("Authority record facts")
+        st.caption(
+            "Values below come from the normalized authority API snapshot. "
+            "They describe the recall—not this food bank's exposure."
+        )
+        if overview:
+            st.table(pd.DataFrame({
+                "authority field": overview.keys(),
+                "source value": overview.values(),
+            }))
+        for source_record in source_records:
+            record_number = source_record.get("Recall number", "number not stated")
+            st.markdown(
+                f"**Product record {source_record.get('Record', '?')} · "
+                f"{record_number}**"
+            )
+            record_values = {
+                key: value
+                for key, value in source_record.items()
+                if key != "Record"
+            }
+            st.table(pd.DataFrame({
+                "authority field": record_values.keys(),
+                "source value": record_values.values(),
+            }))
+        st.divider()
 
     left, right = st.columns([1, 1])
     with left:
-        st.subheader("Incident facts")
+        st.subheader(
+            "Operational entity extraction" if source_api else "Incident facts"
+        )
         st.markdown(
             f"**{ev['event_id']}** · authority {ev['authority']} · status {ev['status']} · "
             f"extraction {ev['extraction_method'] or '-'} "
             f"(confidence {ev['extraction_confidence'] or 0:g})")
+        start_date = ext.get("production_date_start")
+        end_date = ext.get("production_date_end")
+        if start_date and end_date:
+            production_window = f"{start_date} to {end_date}"
+        else:
+            production_window = start_date or end_date or "—"
         facts = {
             "Products": ", ".join(ext.get("products", [])) or "—",
             "Suppliers": ", ".join(ext.get("supplier_names", [])) or "—",
             "Facilities": ", ".join(ext.get("facility_names", [])) or "—",
             "Lot codes": ", ".join(ext.get("lot_codes", [])) or "—",
             "UPCs": ", ".join(ext.get("upcs", [])) or "—",
-            "Production window": (f"{ext.get('production_date_start') or '?'} to "
-                                  f"{ext.get('production_date_end') or '?'}"),
+            "Production window": production_window,
             "Regions": ", ".join(ext.get("distribution_regions", [])) or "—",
-            "Hazard": ext.get("pathogen") or "—",
+            "Biological pathogen": ext.get("pathogen") or "—",
             "Action required": ext.get("action_required") or "—",
         }
         st.table(pd.DataFrame({"fact": facts.keys(), "extracted value": facts.values()}))
@@ -627,11 +661,16 @@ def view_exposure(conn, event_id: str) -> None:
             conn.commit()
             st.rerun()
     with right:
-        st.subheader("Source excerpts (verbatim provenance)")
+        st.subheader(
+            "Source evidence (normalized field provenance)"
+            if source_api else "Source excerpts (verbatim provenance)"
+        )
         exc = ext.get("excerpts", {})
         if exc:
-            st.dataframe(pd.DataFrame({"field": exc.keys(), "supporting quote": exc.values()}),
-                         hide_index=True, use_container_width=True)
+            st.table(pd.DataFrame({
+                "field": exc.keys(),
+                "supporting quote": exc.values(),
+            }))
         with st.expander("Normalized source snapshot (API fields)"):
             st.text(ev["raw_text"])
 
@@ -1092,7 +1131,7 @@ def _technical_page(conn: sqlite3.Connection) -> None:
           <div class="fs-tech-eyebrow">Technical architecture · bounded agency</div>
           <h1>Language understands. Code decides. Humans authorize.</h1>
           <p>
-            FoodShock is a reusable incident-response framework: a code-orchestrated
+            Farms for Food is a reusable incident-response framework: a code-orchestrated
             agent turns an official API record or unstructured safety notice into
             evidence-linked operational state, invokes deterministic planning tools,
             and stops at a human review or approval gate.
@@ -1164,7 +1203,7 @@ def _technical_page(conn: sqlite3.Connection) -> None:
           <section class="fs-lane language">
             <h3>Language layer</h3>
             <p><strong>Best at ambiguity:</strong> extract entities from narrative notices, explain tradeoffs, and draft operator communications. Structured outputs must survive schema and verbatim-provenance checks.</p>
-            <p>Official API records use deterministic field mapping instead of an LLM. Curated replays retain cached extraction and templates as an offline fallback without pretending to be a live model evaluation.</p>
+            <p>Official API records start with deterministic field mapping, then cached Claude enrichment may fill only missing fields supported by verbatim source evidence. Curated replays retain cached extraction and templates as an offline fallback without pretending to be a live model evaluation.</p>
           </section>
           <section class="fs-lane control">
             <h3>Deterministic control layer</h3>
@@ -1198,6 +1237,73 @@ def _technical_page(conn: sqlite3.Connection) -> None:
         ]),
         hide_index=True,
         use_container_width=True,
+    )
+
+    st.subheader("Entity-resolution evidence tiers")
+    st.caption(
+        "Executable resolver behavior—not an aspirational taxonomy. Product matching "
+        "uses normalized exact text or at least two shared normalized tokens. Dates are "
+        "tri-state: overlap, conflict, or unknown; a missing window is never counted as "
+        "positive evidence."
+    )
+    st.dataframe(
+        pd.DataFrame([
+            {
+                "tier": "1 · Authoritative identifier",
+                "required evidence": (
+                    "Exact supplier lot code on an inventory lot, or exact product UPC "
+                    "plus applicable receipt/delivery date on an inventory lot or inbound PO"
+                ),
+                "date handling": (
+                    "Lot code is decisive; UPC requires receipt/delivery from production "
+                    "start through end + 14 days. Missing → unknown; conflict → not matched"
+                ),
+                "result": "Confirmed when complete; otherwise human review",
+                "review behavior": "Confirmed records are immediately excluded",
+            },
+            {
+                "tier": "2 · Exact lineage",
+                "required evidence": (
+                    "Exact normalized supplier name + product match + applicable "
+                    "receipt or expected-delivery date"
+                ),
+                "date handling": (
+                    "Lot: start through end + 14 days. PO: on/after start. "
+                    "A complete window is required; missing → unknown; conflict → not matched"
+                ),
+                "result": "Probable on overlap; unknown when dates are missing",
+                "review behavior": "Held conservatively until a person clears or quarantines",
+            },
+            {
+                "tier": "3 · Alias or facility",
+                "required evidence": (
+                    "Supplier alias or exact facility name + product match + applicable "
+                    "receipt or expected-delivery date"
+                ),
+                "date handling": (
+                    "Lot: start through end + 14 days. PO: on/after start. "
+                    "A complete window is required; missing → unknown; conflict → not matched"
+                ),
+                "result": "Probable on overlap; unknown when dates are missing",
+                "review behavior": "Evidence and verbatim source excerpts remain inspectable",
+            },
+            {
+                "tier": "4 · Fuzzy lineage",
+                "required evidence": (
+                    "Supplier-name similarity of at least 0.72 + product match; "
+                    "a stated date window must not conflict"
+                ),
+                "date handling": "Missing complete window stays explicitly unresolved",
+                "result": "Possible; always requires human review",
+                "review behavior": "Prioritized for human review; never auto-cleared",
+            },
+        ]),
+        hide_index=True,
+        use_container_width=True,
+    )
+    st.caption(
+        "Scores order investigation only. They are not probabilities and never "
+        "declare food safe."
     )
 
     left, right = st.columns([1.05, 1.3])
@@ -1265,8 +1371,8 @@ def main() -> None:
     st.sidebar.markdown(
         """
         <div class="fs-brand">
-          <div class="fs-monogram">FS</div>
-          <div class="fs-brand-name">FoodShock</div>
+          <div class="fs-monogram">FF</div>
+          <div class="fs-brand-name">Farms for Food</div>
         </div>
         <div class="fs-project-kicker">Agentic operations framework</div>
         <div class="fs-project-copy">
@@ -1347,7 +1453,7 @@ def main() -> None:
             st.sidebar.error(source_error)
             st.sidebar.caption(
                 "This authority feed failed independently. Choose openFDA or a "
-                "curated demo; the rest of FoodShock remains available."
+                "curated demo; the rest of Farms for Food remains available."
             )
         if live_incidents:
             by_key = {incident.key: incident for incident in live_incidents}
@@ -1459,7 +1565,10 @@ def main() -> None:
             "Language layer: "
             + ("live model allowed" if ALLOW_LLM else "offline cache/template")
         )
-        st.caption("Authority APIs use deterministic field mapping with provenance checks.")
+        st.caption(
+            "Authority APIs use deterministic mapping; cached Claude enrichment "
+            "may fill only missing, provenance-supported entity fields."
+        )
 
     if page == "technical":
         _technical_page(conn)

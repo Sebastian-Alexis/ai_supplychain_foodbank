@@ -15,6 +15,7 @@ from foodshock.incident_sources import (
     _normalize_fsis,
     _normalize_openfda,
     _read_json_array_prefix,
+    parse_source_snapshot,
 )
 
 
@@ -42,7 +43,7 @@ def test_openfda_groups_records_without_calling_non_pathogens_pathogens():
                 "status": "Ongoing",
                 "classification": "Class II",
                 "recalling_firm": "Example Foods",
-                "product_description": "Vegan nuggets, UPC 111",
+                "product_description": "Vegan nuggets, UPC 028989101105",
                 "reason_for_recall": "Potential contamination with plastic material",
                 "distribution_pattern": "Nationwide",
                 "recall_number": "H-1-2026",
@@ -56,7 +57,7 @@ def test_openfda_groups_records_without_calling_non_pathogens_pathogens():
                 "status": "Ongoing",
                 "classification": "Class II",
                 "recalling_firm": "Example Foods",
-                "product_description": "Vegan patties, UPC 222",
+                "product_description": "Vegan patties, UPC 028989100948",
                 "reason_for_recall": "Undeclared peanuts",
                 "distribution_pattern": "Nationwide",
                 "recall_number": "H-2-2026",
@@ -78,14 +79,40 @@ def test_openfda_groups_records_without_calling_non_pathogens_pathogens():
     assert incident.published_at == "2026-07-08"
     assert incident.classification == "Class II"
     assert incident.extraction.products == [
-        "Vegan nuggets, UPC 111",
-        "Vegan patties, UPC 222",
+        "Vegan nuggets, UPC 028989101105",
+        "Vegan patties, UPC 028989100948",
     ]
     assert incident.extraction.supplier_names == ["Example Foods"]
+    assert incident.extraction.upcs == ["028989101105", "028989100948"]
     assert incident.extraction.pathogen is None
     assert "plastic material" in incident.reason_summary
     assert "Undeclared peanuts" in incident.raw_text
     assert "event_id%3A%2299292%22" in incident.source_url
+    overview, product_records = parse_source_snapshot(incident.raw_text)
+    assert overview["Event ID"] == "99292"
+    assert overview["Distribution pattern"] == "Nationwide"
+    assert product_records == [
+        {
+            "Record": "1",
+            "Recall number": "H-1-2026",
+            "Product": "Vegan nuggets, UPC 028989101105",
+            "Reason for recall": "Potential contamination with plastic material",
+            "Code information": "Best by 2027-01-01",
+            "Recall initiation date": "20260618",
+            "Report date": "20260708",
+            "Quantity": "10 cases",
+        },
+        {
+            "Record": "2",
+            "Recall number": "H-2-2026",
+            "Product": "Vegan patties, UPC 028989100948",
+            "Reason for recall": "Undeclared peanuts",
+            "Code information": "Lot 22",
+            "Recall initiation date": "20260618",
+            "Report date": "20260708",
+            "Quantity": "5 cases",
+        },
+    ]
 
 
 def test_fsis_filters_language_and_prioritizes_active_records():

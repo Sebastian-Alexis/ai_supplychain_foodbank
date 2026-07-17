@@ -4,10 +4,10 @@ const QRCode = require('qrcode');
 
 const pptx = new PptxGenJS();
 pptx.layout = 'LAYOUT_WIDE';
-pptx.author = 'FoodShock';
-pptx.company = 'FoodShock';
+pptx.author = 'Farms for Food';
+pptx.company = 'Farms for Food';
 pptx.subject = 'Human-approved food-bank recall response and recovery planning';
-pptx.title = 'FoodShock — recall response command center';
+pptx.title = 'Farms for Food — recall response command center';
 pptx.lang = 'en-US';
 pptx.theme = {
   headFontFace: 'Aptos Display',
@@ -15,12 +15,12 @@ pptx.theme = {
   lang: 'en-US',
 };
 pptx.defineSlideMaster({
-  title: 'FOODSHOCK',
+  title: 'FARMS_FOR_FOOD',
   background: { color: 'F4F0E6' },
   objects: [
     { rect: { x: 0, y: 0, w: 0.18, h: 7.5, fill: { color: 'B94735' }, line: { color: 'B94735' } } },
-    { text: { text: 'FS', options: { x: 0.68, y: 0.28, w: 0.38, h: 0.3, fontFace: 'Aptos', fontSize: 10, bold: true, align: 'center', valign: 'mid', color: 'FFFDF8', fill: { color: '143B37' }, margin: 0 } } },
-    { text: { text: 'FoodShock', options: { x: 1.13, y: 0.26, w: 1.25, h: 0.32, fontFace: 'Aptos', fontSize: 11, bold: true, color: '143B37', margin: 0 } } },
+    { text: { text: 'FF', options: { x: 0.68, y: 0.28, w: 0.38, h: 0.3, fontFace: 'Aptos', fontSize: 10, bold: true, align: 'center', valign: 'mid', color: 'FFFDF8', fill: { color: '143B37' }, margin: 0 } } },
+    { text: { text: 'Farms for Food', options: { x: 1.13, y: 0.26, w: 1.55, h: 0.32, fontFace: 'Aptos', fontSize: 11, bold: true, color: '143B37', margin: 0 } } },
   ],
   slideNumber: { x: 12.52, y: 7.04, w: 0.24, h: 0.2, color: '61706D', fontFace: 'Aptos', fontSize: 8, align: 'right', margin: 0 },
 });
@@ -46,10 +46,10 @@ const C = {
 };
 
 const SH = pptx.ShapeType;
-const appUrl = 'https://foodshock.sebastianalexis.com';
+const appUrl = 'https://farmsforfood.sebastianalexis.com';
 const repoUrl = 'https://github.com/Sebastian-Alexis/ai_supplychain_foodbank';
 const asset = (name) => path.join(__dirname, '..', 'deliverables', 'assets', name);
-const output = path.join(__dirname, '..', 'deliverables', 'FoodShock_pitch_deck.pptx');
+const output = path.join(__dirname, '..', 'deliverables', 'Farms_for_Food_pitch_deck.pptx');
 
 function addText(slide, text, x, y, w, h, opts = {}) {
   slide.addText(text, {
@@ -192,8 +192,8 @@ async function build() {
     slide.addShape(SH.rect, { x: 0, y: 0, w: 0.18, h: 7.5, fill: { color: C.coral }, line: { color: C.coral } });
     slide.addShape(SH.rect, { x: 7.95, y: 0, w: 5.38, h: 7.5, fill: { color: C.deep }, line: { color: C.deep } });
     slide.addShape(SH.rect, { x: 0.72, y: 0.6, w: 0.48, h: 0.48, fill: { color: C.paper, transparency: 100 }, line: { color: C.paper, width: 1 } });
-    addText(slide, 'FS', 0.72, 0.65, 0.48, 0.32, { fontSize: 11, bold: true, align: 'center', color: C.paper });
-    addText(slide, 'FoodShock', 1.38, 0.63, 1.8, 0.36, { fontSize: 15, bold: true, color: C.paper });
+    addText(slide, 'FF', 0.72, 0.65, 0.48, 0.32, { fontSize: 11, bold: true, align: 'center', color: C.paper });
+    addText(slide, 'Farms for Food', 1.38, 0.63, 2.2, 0.36, { fontSize: 15, bold: true, color: C.paper });
     addText(slide, 'RECALL RESPONSE COMMAND CENTER', 0.72, 1.55, 5.8, 0.3, { fontSize: 10.5, bold: true, charSpacing: 1.5, color: C.aqua });
     addText(slide, 'From recall notice to\nhuman-approved recovery plan.', 0.72, 1.95, 7.0, 1.42, {
       fontFace: 'Aptos Display', fontSize: 37, bold: true, color: C.paper, valign: 'top', breakLine: true,
@@ -217,19 +217,19 @@ async function build() {
       if (i < flow.length - 1) addArrow(slide, flowX[i] + 0.72, 1.81, flowX[i + 1] - 0.04, 1.81, C.aqua, 1.3);
     });
 
-    addMetricCard(slide, 8.45, 3.55, 1.3, 1.45, '1.20s', 'planning time', C.aqua, 'latest seeded run');
-    addMetricCard(slide, 9.95, 3.55, 1.3, 1.45, '+1,800', 'lb served', C.coral, 'vs baseline');
+    addMetricCard(slide, 8.45, 3.55, 1.3, 1.45, '0.10s', 'planning time', C.aqua, 'deployed seeded run');
+    addMetricCard(slide, 9.95, 3.55, 1.3, 1.45, '+1,000', 'lb served', C.coral, 'vs baseline');
     addMetricCard(slide, 11.45, 3.55, 1.3, 1.45, '0', 'violations', C.aqua, 'hard constraints');
     addPill(slide, 'LIVE DEMO', 8.45, 5.55, 1.1, C.coral);
-    addText(slide, 'foodshock.sebastianalexis.com', 9.72, 5.53, 3.02, 0.35, { fontSize: 10.5, bold: true, color: C.paper, hyperlink: { url: appUrl } });
+    addText(slide, 'farmsforfood.sebastianalexis.com', 9.72, 5.53, 3.02, 0.35, { fontSize: 10.5, bold: true, color: C.paper, hyperlink: { url: appUrl } });
     addText(slide, 'Live FDA/USDA incidents. Synthetic food-bank operations. No client PII.', 0.72, 6.92, 7.4, 0.25, { fontSize: 9, color: C.aqua });
     addText(slide, '1', 12.52, 7.03, 0.24, 0.2, { fontSize: 8, color: C.aqua, align: 'right' });
-    addNotes(slide, 'FoodShock is a decision-support command center for food-bank recall response. Current openFDA and USDA FSIS incidents enter through official APIs, while inventory, purchase orders, demand, and recovery offers remain synthetic. The system ends at a human approval gate and exposes no action when an authority incident has no linked lot or purchase order.');
+    addNotes(slide, 'Farms for Food is a decision-support command center for food-bank recall response. Current openFDA and USDA FSIS incidents enter through official APIs, while inventory, purchase orders, demand, and recovery offers remain synthetic. The system ends at a human approval gate and exposes no action when an authority incident has no linked lot or purchase order.');
   }
 
   // 2 — Why now
   {
-    const slide = pptx.addSlide('FOODSHOCK');
+    const slide = pptx.addSlide('FARMS_FOR_FOOD');
     addTitle(slide, 'Recall volume is high; consequences are operational.', 'Why now');
     addText(slide, 'Public 2024 records show the scale. A single contaminated ingredient can intersect a perishable, high-throughput food-bank network.', 0.72, 1.72, 11.8, 0.58, { fontSize: 16, color: C.muted, valign: 'top' });
 
@@ -264,7 +264,7 @@ async function build() {
 
   // 3 — Operational blind spot
   {
-    const slide = pptx.addSlide('FOODSHOCK');
+    const slide = pptx.addSlide('FARMS_FOR_FOOD');
     addTitle(slide, 'The operational blind spot is the join.', 'Problem');
     addText(slide, 'Recall notices describe risk in prose. Response teams must connect that prose to exact inventory, inbound purchase orders, pantry commitments, and feasible replacements.', 0.72, 1.72, 11.7, 0.62, { fontSize: 16, color: C.muted, valign: 'top' });
 
@@ -301,12 +301,12 @@ async function build() {
       { label: 'Rhode Island Community Food Bank recall process', url: 'https://rifoodbank.org/wp-content/uploads/2023/06/Food-Safety-Recall-Process-doc.pdf' },
       { label: 'MANNA FoodBank recall workflow', url: 'https://mannafoodbank.org/agency-access-and-information/product-recalls/' },
     ], 'Workflow sources show notice intake, inventory isolation, agency notification, and disposition tasks.');
-    addNotes(slide, 'The job is not summarization. It is a relational join across notice fields and operational records, followed by constrained recovery planning. FoodShock makes each join inspectable.');
+    addNotes(slide, 'The job is not summarization. It is a relational join across notice fields and operational records, followed by constrained recovery planning. Farms for Food makes each join inspectable.');
   }
 
   // 4 — Architecture and guardrails
   {
-    const slide = pptx.addSlide('FOODSHOCK');
+    const slide = pptx.addSlide('FARMS_FOR_FOOD');
     addTitle(slide, 'Agentic analysis. Deterministic execution boundary.', 'System');
     addText(slide, 'Current openFDA and FSIS incidents cross a provenance-verified source boundary before the agent joins them to synthetic operations. Zero linked lots or POs means zero exposure and no approval action.', 0.72, 1.72, 11.7, 0.66, { fontSize: 15, color: C.muted, valign: 'top' });
 
@@ -359,15 +359,26 @@ async function build() {
 
   // 5 — Exposure proof
   {
-    const slide = pptx.addSlide('FOODSHOCK');
+    const slide = pptx.addSlide('FARMS_FOR_FOOD');
     addTitle(slide, 'Every claim can be traced back to evidence.', 'Product proof');
-    addText(slide, 'The curated positive-exposure view pairs typed incident facts with verbatim source excerpts and exact operational lineage. Live API incidents use the same evidence contract and can stop honestly at zero exposure.', 0.72, 1.72, 11.7, 0.55, { fontSize: 15.2, color: C.muted, valign: 'top' });
+    addText(slide, 'Typed incident facts survive only when a retained source excerpt supports the exact value. Live API incidents use the same contract and can stop honestly at zero exposure.', 0.72, 1.72, 11.7, 0.55, { fontSize: 15.2, color: C.muted, valign: 'top' });
 
     addCard(slide, 0.72, 2.48, 8.55, 4.15, { fill: C.paper, line: C.line, shadow: false });
-    slide.addImage({
-      path: asset('foodshock-public-exposure-crop.png'),
-      x: 0.86, y: 2.62, w: 8.27, h: 3.87,
-      altText: 'FoodShock exposure queue showing incident facts and supporting source excerpts',
+    addText(slide, 'NORMALIZED FACT', 1.02, 2.76, 2.55, 0.24, { fontSize: 9.5, bold: true, charSpacing: 1.0, color: C.coral });
+    addText(slide, 'VERBATIM SOURCE EVIDENCE', 4.28, 2.76, 4.6, 0.24, { fontSize: 9.5, bold: true, charSpacing: 1.0, color: C.teal });
+    const proofPairs = [
+      ['supplier_names', 'Golden Valley Produce LLC', '“Golden Valley Produce LLC of Salinas, California is voluntarily recalling”'],
+      ['lot_codes', 'GVP-8842, GVP-8843', '“lot codes GVP-8842 and GVP-8843”'],
+      ['production window', '2026-06-20 → 2026-07-02', '“between June 20, 2026 and July 2, 2026”'],
+    ];
+    proofPairs.forEach(([field, value, quote], i) => {
+      const y = 3.16 + i * 1.02;
+      addCard(slide, 1.02, y, 2.65, 0.79, { fill: C.blush, line: C.line, shadow: false });
+      addText(slide, field, 1.24, y + 0.12, 2.2, 0.2, { fontSize: 8.8, bold: true, color: C.coral });
+      addText(slide, value, 1.24, y + 0.36, 2.2, 0.3, { fontSize: 11.8, bold: true, color: C.ink });
+      addArrow(slide, 3.79, y + 0.4, 4.12, y + 0.4, C.coral, 1.8);
+      addCard(slide, 4.28, y, 4.65, 0.79, { fill: C.mist, line: C.line, shadow: false });
+      addText(slide, quote, 4.55, y + 0.12, 4.08, 0.54, { fontSize: 12, italic: true, color: C.ink, valign: 'mid' });
     });
 
     addCard(slide, 9.62, 2.48, 3.0, 4.15, { fill: C.mist, line: C.teal, shadow: false });
@@ -379,20 +390,20 @@ async function build() {
     addSourceFooter(slide, [
       { label: 'Live exposure queue', url: appUrl },
       { label: 'Extraction verifier', url: `${repoUrl}/blob/main/foodshock/extraction.py` },
-    ], 'Screenshot: curated positive-exposure fallback. Live authority incidents use the same provenance contract.');
-    addNotes(slide, 'The screenshot is not a mockup; it is the public Streamlit application running the deterministic positive-exposure fallback. Current openFDA and USDA FSIS records retain the same field-level provenance, authority warning, retrieval time, and source link. If no synthetic lot or purchase order joins to that real incident, FoodShock presents an explicit no-exposure result instead of manufacturing a recovery action.');
+    ], 'Curated source-evidence pairs shown at presentation scale; live incidents retain the same provenance contract.');
+    addNotes(slide, 'These source-evidence pairs come from the public deterministic positive-exposure replay and are enlarged so the provenance contract is inspectable in the room. Current openFDA and USDA FSIS records retain the same field-level provenance, authority warning, retrieval time, and source link. If no synthetic lot or purchase order joins to a real incident, Farms for Food presents an explicit no-exposure result instead of manufacturing a recovery action.');
   }
 
   // 6 — Results
   {
-    const slide = pptx.addSlide('FOODSHOCK');
+    const slide = pptx.addSlide('FARMS_FOR_FOOD');
     addTitle(slide, 'The recovery plan restores service without breaking safety.', 'Measured demo run');
     addText(slide, 'Baseline and recommended scenarios use the same seven-day synthetic demand. Confirmed recall states are excluded from both.', 0.72, 1.72, 11.6, 0.48, { fontSize: 15.5, color: C.muted });
 
     addCard(slide, 0.72, 2.42, 7.25, 3.95, { fill: C.paper, line: C.line, shadow: false });
     addText(slide, 'Seven-day service outcome (lb)', 1.05, 2.72, 4.2, 0.32, { fontSize: 13, bold: true });
     slide.addChart(pptx.ChartType.bar, [
-      { name: 'Do nothing', labels: ['Served', 'Unmet'], values: [10122.5, 2477.5] },
+      { name: 'Do nothing', labels: ['Served', 'Unmet'], values: [10922.5, 1677.5] },
       { name: 'Recommended', labels: ['Served', 'Unmet'], values: [11922.5, 677.5] },
     ], {
       x: 1.0, y: 3.13, w: 6.62, h: 2.8,
@@ -411,32 +422,43 @@ async function build() {
       showBorder: false,
     });
 
-    addMetricCard(slide, 8.32, 2.42, 2.02, 1.15, '86.1%', 'worst pantry fill', C.teal, 'from 64.3%');
-    addMetricCard(slide, 10.58, 2.42, 2.02, 1.15, '68', 'boxes disrupted', C.teal, 'from 248');
-    addMetricCard(slide, 8.32, 3.83, 2.02, 1.15, '$990', 'procurement cost', C.amber, 'recommended plan');
-    addMetricCard(slide, 10.58, 3.83, 2.02, 1.15, '7+', 'produce days', C.teal, 'from 4.8');
+    addMetricCard(slide, 8.32, 2.42, 2.02, 1.15, '86.1%', 'worst pantry fill', C.teal, 'from 70.6%');
+    addMetricCard(slide, 10.58, 2.42, 2.02, 1.15, '68', 'boxes disrupted', C.teal, 'from 168');
+    addMetricCard(slide, 8.32, 3.83, 2.02, 1.15, '$550', 'procurement cost', C.amber, 'recommended plan');
+    addMetricCard(slide, 10.58, 3.83, 2.02, 1.15, '7+', 'produce days', C.teal, 'from 5.8');
     addMetricCard(slide, 8.32, 5.24, 2.02, 1.15, '0', 'hard violations', C.teal, 'approval gate');
-    addMetricCard(slide, 10.58, 5.24, 2.02, 1.15, '1.20s', 'planning time', C.teal, 'latest seeded run');
+    addMetricCard(slide, 10.58, 5.24, 2.02, 1.15, '0.10s', 'planning time', C.teal, 'deployed seeded run');
 
     addSourceFooter(slide, [
       { label: 'Deterministic demo runner', url: `${repoUrl}/blob/main/foodshock/demo.py` },
       { label: 'Scenario database', url: `${repoUrl}/tree/main/data` },
-    ], 'Measured locally on the synthetic scenario. No comparison to the hypothetical 2.0 staff-hour task model is claimed.');
-    addNotes(slide, 'The recommended plan adds 1,800 pounds served, cuts unmet demand by the same amount, raises the worst pantry fill rate by 21.8 percentage points, and cuts disrupted boxes from 248 to 68 for 990 dollars. The runtime is a measured software run; the manual-time comparator remains hypothetical and is intentionally excluded from the chart.');
+    ], 'Measured on the deployed synthetic scenario. No comparison to the hypothetical 2.0 staff-hour task model is claimed.');
+    addNotes(slide, 'The recommended plan adds 1,000 pounds served, cuts unmet demand by the same amount, raises the worst pantry fill rate by 15.5 percentage points, and cuts disrupted boxes from 168 to 68 for 550 dollars. The runtime is a measured software run; the manual-time comparator remains hypothetical and is intentionally excluded from the chart.');
   }
 
   // 7 — Human approval
   {
-    const slide = pptx.addSlide('FOODSHOCK');
+    const slide = pptx.addSlide('FARMS_FOR_FOOD');
     addTitle(slide, 'Human approval is a transaction, not a button.', 'Control');
-    addText(slide, 'The UI presents a draft plan and its tradeoffs. Approval revalidates plan currency and feasibility, then writes one auditable state transition.', 0.72, 1.72, 11.65, 0.55, { fontSize: 15.5, color: C.muted, valign: 'top' });
+    addText(slide, 'Approval re-reads current state, rejects stale or altered drafts, and commits one auditable transition only after every hard constraint still passes.', 0.72, 1.72, 11.65, 0.55, { fontSize: 15.5, color: C.muted, valign: 'top' });
 
     addCard(slide, 0.72, 2.48, 8.55, 4.15, { fill: C.paper, line: C.line, shadow: false });
-    slide.addImage({
-      path: asset('foodshock-public-plan-crop.png'),
-      x: 0.86, y: 2.62, w: 8.27, h: 3.87,
-      altText: 'FoodShock recovery plan showing service, unmet demand, cost, disruptions, and hard-constraint violations',
+    addText(slide, 'EXECUTABLE APPROVAL PATH', 1.02, 2.78, 3.5, 0.24, { fontSize: 9.5, bold: true, charSpacing: 1.0, color: C.coral });
+    const approvalStages = [
+      ['1 · DRAFT', C.slate, 'PLAN-RECOMMENDED-002', '$550 procurement\n0 hard violations\nreview gaps surfaced'],
+      ['2 · REVALIDATE', C.amber, 'Read current state again', 'latest plan + payload\nlive offers + timing\nall hard constraints'],
+      ['3 · COMMIT ONCE', C.teal, 'Approved + audited', 'operator + timestamp\nsingle status transition\nscoped communications'],
+    ];
+    const approvalXs = [1.02, 3.73, 6.44];
+    approvalStages.forEach(([tag, color, title, body], i) => {
+      const x = approvalXs[i];
+      addCard(slide, x, 3.23, 2.31, 2.7, { fill: i === 2 ? C.mist : C.paper, line: color, lineWidth: 1.4, shadow: false });
+      addPill(slide, tag, x + 0.2, 3.48, 1.45, color);
+      addText(slide, title, x + 0.2, 4.03, 1.91, 0.55, { fontSize: 13.2, bold: true, color: C.ink, valign: 'top' });
+      addText(slide, body, x + 0.2, 4.78, 1.91, 0.82, { fontSize: 10.5, color: C.muted, valign: 'top', breakLine: true, paraSpaceAfterPt: 5 });
+      if (i < approvalStages.length - 1) addArrow(slide, x + 2.38, 4.61, x + 2.64, 4.61, C.coral, 1.8);
     });
+    addText(slide, 'ANY MISMATCH  →  REJECT WITH NO PARTIAL SIDE EFFECTS', 1.02, 6.18, 7.73, 0.24, { fontSize: 10, bold: true, align: 'center', charSpacing: 0.5, color: C.coral });
 
     addCard(slide, 9.62, 2.48, 3.0, 2.48, { fill: C.mist, line: C.line, shadow: false });
     addText(slide, 'Approval gates', 9.96, 2.76, 2.22, 0.3, { fontSize: 14, bold: true });
@@ -449,15 +471,15 @@ async function build() {
     addText(slide, 'Lot-specific pantry notices\nPurchase instructions\nAuditable approval event', 9.96, 5.84, 2.2, 0.62, { fontSize: 10.3, color: C.aqua, valign: 'top', breakLine: true, paraSpaceAfterPt: 4 });
 
     addSourceFooter(slide, [
-      { label: 'Live recovery plan', url: appUrl },
+      { label: 'Live approval flow', url: appUrl },
       { label: 'Approval regression tests', url: `${repoUrl}/blob/main/tests/test_agent.py` },
-    ], 'Screenshot captured from the public synthetic-data demo.');
-    addNotes(slide, 'Approval is idempotent, rejects unknown or stale plans, revalidates plan lines, and re-checks hard constraints. Communications are scoped to implicated lot IDs instead of broadcasting generic recall language to unaffected recipients.');
+    ], 'Diagram maps the executed approval path; no model or UI click bypasses revalidation.');
+    addNotes(slide, 'Approval is idempotent, rejects unknown or stale plans, revalidates plan lines and payload integrity, and re-checks hard constraints. Any mismatch rejects the transaction before side effects. Communications are scoped to implicated lot IDs instead of broadcasting generic recall language to unaffected recipients.');
   }
 
   // 8 — Evidence status
   {
-    const slide = pptx.addSlide('FOODSHOCK');
+    const slide = pptx.addSlide('FARMS_FOR_FOOD');
     addTitle(slide, 'Evidence is separated from ambition.', 'Validation status');
     addText(slide, 'Measured behavior, evaluation readiness, and future validation are reported as different categories. No unavailable result is converted into a claim.', 0.72, 1.72, 11.7, 0.52, { fontSize: 15.5, color: C.muted, valign: 'top' });
 
@@ -467,19 +489,19 @@ async function build() {
         title: 'Implemented + measured',
         items: [
           ['2 feeds', 'on-demand openFDA + FSIS'],
-          ['78 tests', 'deterministic regression suite'],
+          ['99 tests', 'deterministic regression suite'],
           ['0', 'hard-constraint violations'],
-          ['+1,800 lb', 'curated recovery vs baseline'],
+          ['+1,000 lb', 'curated recovery vs baseline'],
         ],
       },
       {
-        x: 4.89, fill: C.amberBg, line: C.amber, tag: 'READY / NOT RUN', tagColor: C.amber,
+        x: 4.89, fill: C.amberBg, line: C.amber, tag: 'READY / NOT RUN', tagColor: C.amber, valueColor: C.ink,
         title: 'Extraction evaluation',
         items: [
           ['5 notices', 'frozen official gold set'],
           ['Exact match', 'field-level scorer'],
           ['Provenance', 'raw + verified outputs'],
-          ['No rate', 'Anthropic credential unavailable'],
+          ['No rate', 'live model eval not run'],
         ],
       },
       {
@@ -499,7 +521,7 @@ async function build() {
       addText(slide, col.title, col.x + 0.32, 3.38, 2.85, 0.33, { fontSize: 14.5, bold: true });
       col.items.forEach(([value, label], i) => {
         const y = 3.98 + i * 0.59;
-        addText(slide, value, col.x + 0.32, y, 1.22, 0.29, { fontSize: 12.5, bold: true, color: col.tagColor });
+        addText(slide, value, col.x + 0.32, y, 1.22, 0.29, { fontSize: 12.5, bold: true, color: col.valueColor || col.tagColor });
         addText(slide, label, col.x + 1.72, y + 0.01, 1.47, 0.3, { fontSize: 9.6, color: C.ink, valign: 'top' });
       });
     });
@@ -510,7 +532,7 @@ async function build() {
       { label: 'Evaluation runner', url: `${repoUrl}/blob/main/foodshock/eval_extraction.py` },
       { label: 'Safety tests', url: `${repoUrl}/tree/main/tests` },
     ], 'Published evidence is a fallback for discovery, not a substitute for operator interviews.');
-    addNotes(slide, 'The live source adapters retrieve current openFDA and USDA FSIS records, but an authority record is not evidence that the synthetic network is exposed. The deck does not report extraction accuracy because a valid Anthropic credential was unavailable. The gold set and scorer are committed for a reproducible future run. Operational outcomes remain synthetic and are not operator-validated.');
+    addNotes(slide, 'The live source adapters retrieve current openFDA and USDA FSIS records, but an authority record is not evidence that the synthetic network is exposed. The deck does not report extraction accuracy because the committed live-model evaluation has not been run with an isolated credential. The gold set and scorer are committed for a reproducible future run. Operational outcomes remain synthetic and are not operator-validated.');
   }
 
   // 9 — Close
@@ -519,8 +541,8 @@ async function build() {
     slide.background = { color: C.pine };
     slide.addShape(SH.rect, { x: 0, y: 0, w: 0.18, h: 7.5, fill: { color: C.coral }, line: { color: C.coral } });
     slide.addShape(SH.rect, { x: 0.72, y: 0.58, w: 0.42, h: 0.42, fill: { color: C.paper, transparency: 100 }, line: { color: C.paper, width: 1 } });
-    addText(slide, 'FS', 0.72, 0.64, 0.42, 0.25, { fontSize: 9.5, bold: true, align: 'center', color: C.paper });
-    addText(slide, 'FoodShock', 1.3, 0.61, 1.5, 0.3, { fontSize: 13, bold: true, color: C.paper });
+    addText(slide, 'FF', 0.72, 0.64, 0.42, 0.25, { fontSize: 9.5, bold: true, align: 'center', color: C.paper });
+    addText(slide, 'Farms for Food', 1.3, 0.61, 2.0, 0.3, { fontSize: 13, bold: true, color: C.paper });
     addText(slide, 'Pilot one recall.\nProve the decision loop.', 0.72, 1.2, 6.55, 1.35, { fontFace: 'Aptos Display', fontSize: 39, bold: true, color: C.paper, breakLine: true, valign: 'top' });
     addText(slide, 'Start with one notice type, one warehouse, and one pantry network. Measure trace completeness, planning time, reviewer corrections, and service recovery.', 0.72, 2.84, 6.2, 0.88, { fontSize: 17, color: 'D7E7E1', valign: 'top' });
 
@@ -539,8 +561,8 @@ async function build() {
 
     addCard(slide, 8.0, 0.92, 4.62, 5.86, { fill: C.paper, line: C.paper, shadow: false });
     addText(slide, 'Open the live command center', 8.45, 1.35, 3.72, 0.37, { fontSize: 16, bold: true, align: 'center' });
-    slide.addImage({ data: qrData, x: 9.22, y: 1.98, w: 2.18, h: 2.18, hyperlink: { url: appUrl }, altText: 'QR code opening the FoodShock live demo' });
-    addText(slide, 'foodshock.sebastianalexis.com', 8.45, 4.42, 3.72, 0.34, { fontSize: 12.5, bold: true, align: 'center', color: C.teal, hyperlink: { url: appUrl } });
+    slide.addImage({ data: qrData, x: 9.22, y: 1.98, w: 2.18, h: 2.18, hyperlink: { url: appUrl }, altText: 'QR code opening the Farms for Food live demo' });
+    addText(slide, 'farmsforfood.sebastianalexis.com', 8.45, 4.42, 3.72, 0.34, { fontSize: 12.5, bold: true, align: 'center', color: C.teal, hyperlink: { url: appUrl } });
     addText(slide, 'Source code', 8.45, 5.12, 1.2, 0.26, { fontSize: 10, bold: true, color: C.muted });
     addText(slide, 'github.com/Sebastian-Alexis/\nai_supplychain_foodbank', 9.58, 5.09, 2.55, 0.52, { fontSize: 10.2, color: C.teal, hyperlink: { url: repoUrl }, breakLine: true });
     addPill(slide, 'LIVE FEEDS · SYNTHETIC OPS', 8.45, 6.05, 2.5, C.teal);

@@ -1,14 +1,14 @@
-# FoodShock: Food-Bank Supply Shock Radar
+# Farms for Food: Food-Bank Supply Shock Radar
 
 AISCO Hackathon (AI Objectives Institute), July 15–17. Judging: July 17, 9am–1pm.
 
 ## 1. Project Summary
 
-FoodShock is an AI-agent early-warning and recovery system for food banks. A recall-response agent turns evolving food-safety recalls into operational consequences — affected inventory, inbound-order risk, projected shortages — and proposes a human-approved recovery plan.
+Farms for Food is an AI-agent early-warning and recovery system for food banks. A recall-response agent turns evolving food-safety recalls into operational consequences — affected inventory, inbound-order risk, projected shortages — and proposes a human-approved recovery plan.
 
 ### One-line pitch
 
-When a recall drops, FoodShock traces lot- and PO-level exposure, projects the shortage, and drafts a safe recovery plan for an operator to approve.
+When a recall drops, Farms for Food traces lot- and PO-level exposure, projects the shortage, and drafts a safe recovery plan for an operator to approve.
 
 ### Core decision
 
@@ -39,7 +39,7 @@ Public recall notices are narrative and use different product, supplier, facilit
 - [x] **openFDA, 2024 initiation-date view:** 1,387 food-enforcement product records across 482 distinct `event_id` values. Query: [`recall_initiation_date:[20240101 TO 20241231]`, grouped by `event_id`](https://api.fda.gov/food/enforcement.json?search=recall_initiation_date:%5B20240101%2BTO%2B20241231%5D&count=event_id&limit=1000) (retrieved 2026-07-16). These are enforcement events, not necessarily one consumer notice each.
 - [x] **FSIS, 2024 recall-date view:** 34 numbered recall cases (`001-2024` through `034-2024`) plus 19 distinct Public Health Alerts. Counted from the [FSIS Recall API](https://www.fsis.usda.gov/fsis/api/recall/v/1), normalizing translated duplicate rows and `-EXP` expansion records to their base recall number (retrieved 2026-07-16).
 - [x] **Real-world anchor:** FDA and CDC concluded that recalled Taylor Farms yellow onions, served slivered at McDonald's, were the likely source of the 2024 *E. coli* O157:H7 outbreak. Taylor Farms initiated the recall on October 22; CDC reported 104 cases, 34 hospitalizations, one death, and 14 states. Sources: [FDA investigation](https://www.fda.gov/food/outbreaks-foodborne-illness/outbreak-investigation-e-coli-o157h7-onions-october-2024) and [CDC outbreak page](https://www.cdc.gov/ecoli/outbreaks/e-coli-O157.html).
-- [x] **Manual response comparator (explicit internal estimate, not a validated fact):** 2.0 staff-hours = 20 minutes to triage/extract the notice + 60 minutes to cross-reference lots, POs, and destinations + 25 minutes to replan substitutions/allocations + 15 minutes to draft stakeholder updates. The task decomposition is informed by the [Rhode Island Community Food Bank recall workflow](https://rifoodbank.org/wp-content/uploads/2023/06/Food-Safety-Recall-Process-doc.pdf), but the minute values are FoodShock assumptions and have not been operator-validated.
+- [x] **Manual response comparator (explicit internal estimate, not a validated fact):** 2.0 staff-hours = 20 minutes to triage/extract the notice + 60 minutes to cross-reference lots, POs, and destinations + 25 minutes to replan substitutions/allocations + 15 minutes to draft stakeholder updates. The task decomposition is informed by the [Rhode Island Community Food Bank recall workflow](https://rifoodbank.org/wp-content/uploads/2023/06/Food-Safety-Recall-Process-doc.pdf), but the minute values are Farms for Food assumptions and have not been operator-validated.
 
 ## 3. Gate 0: Grounding (first gate — starts immediately, in parallel with build)
 
@@ -74,7 +74,7 @@ The demo scenario is **public-data-inspired synthetic data**. If scaled to a nam
 
 Primary user: a food-bank supply-chain or procurement coordinator responsible for inventory, inbound orders, pantry allocations, and disruption response. Secondary: food-safety staff, warehouse managers, pantry coordinators.
 
-### Questions FoodShock answers
+### Questions Farms for Food answers
 
 1. Which inventory lots are confirmed, probable, or possible recall matches?
 2. Which inbound purchase orders and donations are at risk?
@@ -118,7 +118,7 @@ Primary user: a food-bank supply-chain or procurement coordinator responsible fo
 
 ### Public safety signals (live authority feeds + curated fallback)
 
-- openFDA food enforcement: <https://open.fda.gov/apis/food/enforcement/> — fetched on demand. The API labels its results unvalidated, so FoodShock retains the source record, displays a verification warning, and links back to the authority.
+- openFDA food enforcement: <https://open.fda.gov/apis/food/enforcement/> — fetched on demand. The API labels its results unvalidated, so Farms for Food retains the source record, displays a verification warning, and links back to the authority.
 - USDA FSIS Recall API: <https://www.fsis.usda.gov/science-data/developer-resources/recall-api> — fetched on demand through an independently isolated adapter.
 - CDC multistate foodborne outbreak notices: <https://www.cdc.gov/foodborne-outbreaks/outbreaks/index.html> — source material for curated outbreak analogues; not polled in the MVP.
 
@@ -431,4 +431,4 @@ Later phases must not compromise the working vertical slice.
 
 ### Closing line
 
-FoodShock does not predict illness from dots on a map; it traces a supply disruption through the food bank and helps operators recover before uncertain supply becomes empty shelves.
+Farms for Food does not predict illness from dots on a map; it traces a supply disruption through the food bank and helps operators recover before uncertain supply becomes empty shelves.

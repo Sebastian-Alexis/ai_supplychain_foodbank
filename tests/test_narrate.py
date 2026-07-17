@@ -78,3 +78,32 @@ def test_live_ungrounded_rejected_grounded_cached(tmp_path, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY")
     text2, method2 = narrate("explain", FACTS, "fallback", cache_path=cache)
     assert (text2, method2) == ("we quarantine 1900 lb", "cached-llm")
+
+
+def test_explicit_cache_rejects_pre_contract_legacy_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    cache = tmp_path / "cache.json"
+    cache.write_text(json.dumps({
+        narrate_mod._legacy_key("explain", FACTS): "cached: 1900 lb"
+    }))
+
+    assert narrate(
+        "explain", FACTS, "fallback", cache_path=cache
+    ) == ("fallback", "template")
+
+
+def test_prompt_change_invalidates_cached_response(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    cache = tmp_path / "cache.json"
+    cache.write_text(json.dumps({
+        _key("explain", FACTS): "cached: 1900 lb"
+    }))
+    monkeypatch.setattr(
+        narrate_mod,
+        "_PROMPT",
+        narrate_mod._PROMPT + "\nNew response contract.",
+    )
+
+    assert narrate(
+        "explain", FACTS, "fallback", cache_path=cache
+    ) == ("fallback", "template")

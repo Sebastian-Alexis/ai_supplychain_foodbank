@@ -1,7 +1,7 @@
 [project]
 name = "foodshock"
 version = "0.1.0"
-description = "FoodShock: food-bank supply shock radar (AISCO hackathon MVP)"
+description = "Farms for Food: food-bank supply shock radar (AISCO hackathon MVP)"
 requires-python = ">=3.11"
 dependencies = [
     "pandas>=2.0",
@@ -12,7 +12,7 @@ dependencies = [
     "streamlit>=1.36",
     "plotly>=5.22",
     "pydeck>=0.9",
-    "anthropic>=0.30",
+    "anthropic>=0.116,<1",
 ]
 
 [dependency-groups]

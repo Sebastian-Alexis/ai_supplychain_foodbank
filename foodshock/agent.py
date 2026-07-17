@@ -24,7 +24,8 @@ import pandas as pd
 from .db import insert, now_iso, rows
 from .engine import (before_after, build_plans, days_of_supply,
                      incident_focus, project_supply, propagate, resolve_event)
-from .extraction import ExtractionUnavailable, extract_notice, verify_provenance
+from .extraction import (ExtractionUnavailable, enrich_source_extraction,
+                         extract_notice, verify_provenance)
 from .narrate import narrate
 from .schemas import SCENARIOS, RecallExtraction
 
@@ -124,9 +125,10 @@ class RecallResponseAgent:
                    {"event_id": event_id, "chars": len(raw_text)},
                    lambda: self._ingest(event_id, raw_text, source_url, published_at))
 
-        # Structured authority APIs already provide typed fields. They enter
-        # through the same provenance guard, but do not need an LLM to
-        # reinterpret their JSON fields.
+        # Structured authority fields remain the deterministic base. When the
+        # live language layer is enabled, Claude may fill only missing entity
+        # fields; the merge is cached and every addition must survive the same
+        # source-provenance verifier. Model failure falls back to the API map.
         try:
             if provided_extraction is None:
                 extraction, ext_method, dropped = self._tool(
@@ -137,11 +139,29 @@ class RecallResponseAgent:
                     verified, dropped_fields = verify_provenance(
                         provided_extraction, raw_text
                     )
-                    return verified, provided_extraction_method, dropped_fields
+                    method = provided_extraction_method
+                    enriched, enrichment_method, enrichment_dropped = (
+                        enrich_source_extraction(
+                            raw_text,
+                            verified,
+                            allow_llm=self.allow_llm,
+                        )
+                    )
+                    verified = enriched
+                    dropped_fields = list(dict.fromkeys(
+                        dropped_fields + enrichment_dropped
+                    ))
+                    if enrichment_method:
+                        method = f"{provided_extraction_method}+{enrichment_method}"
+                    return verified, method, dropped_fields
 
                 extraction, ext_method, dropped = self._tool(
                     "investigate", "extract_notice",
-                    {"event_id": event_id, "method": provided_extraction_method},
+                    {
+                        "event_id": event_id,
+                        "method": provided_extraction_method,
+                        "claude_enrichment": self.allow_llm,
+                    },
                     source_extract,
                 )
         except ExtractionUnavailable as exc:

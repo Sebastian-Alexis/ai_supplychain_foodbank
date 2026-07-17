@@ -298,6 +298,8 @@ def _normalize_openfda(payload: dict, *, limit: int,
         products = _unique(_clean(r.get("product_description")) for r in records)
         reasons = _unique(_clean(r.get("reason_for_recall")) for r in records)
         distributions = _unique(_clean(r.get("distribution_pattern")) for r in records)
+        code_infos = _unique(_clean(r.get("code_info")) for r in records)
+        upcs = _upcs_from_text(*products, *code_infos)
         classifications = _unique(_clean(r.get("classification")) for r in records)
         statuses = _unique(_clean(r.get("status")) for r in records)
         reports = [_clean(r.get("report_date")) for r in records]
@@ -339,11 +341,14 @@ def _normalize_openfda(payload: dict, *, limit: int,
             authority="FDA",
             products=products,
             supplier_names=firms,
-            distribution_regions=[],
+            upcs=upcs,
             pathogen=pathogen,
             excerpts={
                 "products": products[0] if products else "",
                 "supplier_names": firms[0] if firms else "",
+                "upcs": _first_text_containing(
+                    upcs[0], *products, *code_infos
+                ) if upcs else "",
                 "pathogen": pathogen or "",
             },
             confidence=0.99,
@@ -478,6 +483,56 @@ def _verified_source_mapping(extraction: RecallExtraction,
         )
     return verified
 
+
+
+_OPENFDA_RECORD_FIELDS = {
+    "Recall number",
+    "Product",
+    "Reason for recall",
+    "Code information",
+    "Recall initiation date",
+    "Report date",
+    "Quantity",
+}
+
+
+def parse_source_snapshot(
+    raw_text: str,
+) -> tuple[dict[str, str], list[dict[str, str]]]:
+    """Parse the retained normalized snapshot for transparent UI rendering."""
+    overview: dict[str, str] = {}
+    records: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    for raw_line in raw_text.splitlines():
+        line = raw_line.strip()
+        record_match = re.fullmatch(r"PRODUCT RECORD (\d+)", line)
+        if record_match:
+            current = {"Record": record_match.group(1)}
+            records.append(current)
+            continue
+        if ": " not in line:
+            continue
+        field, value = line.split(": ", 1)
+        if current is not None and field in _OPENFDA_RECORD_FIELDS:
+            current[field] = value
+        else:
+            overview[field] = value
+    return overview, records
+
+
+def _upcs_from_text(*values: str) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        out.extend(re.findall(
+            r"\bUPC(?:\s+(?:Code|No\.?))?\s*[:#-]?\s*(\d{8,14})\b",
+            value,
+            flags=re.IGNORECASE,
+        ))
+    return _unique(out)
+
+
+def _first_text_containing(needle: str, *values: str) -> str:
+    return next((value for value in values if needle in value), "")
 
 
 def _as_list(value: Any) -> list[Any]:

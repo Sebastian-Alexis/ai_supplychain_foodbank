@@ -271,8 +271,8 @@ def query_inventory(conn, *, supplier: str | None = None, product: str | None = 
                     statuses: tuple[str, ...] | None = None) -> list[dict]:
     """Inventory joined with product+supplier; text filters match names and aliases."""
     sql = """
-    SELECT l.*, p.name AS product_name, p.category, p.temperature_zone,
-           p.unit_cost_per_lb, s.name AS supplier_name
+    SELECT l.*, p.name AS product_name, p.category, p.upc AS product_upc,
+           p.temperature_zone, p.unit_cost_per_lb, s.name AS supplier_name
     FROM inventory_lots l
     JOIN products p ON p.product_id = l.product_id
     JOIN suppliers s ON s.supplier_id = l.supplier_id
@@ -302,7 +302,8 @@ def query_inventory(conn, *, supplier: str | None = None, product: str | None = 
 def query_purchase_orders(conn, *, supplier: str | None = None, product: str | None = None,
                           statuses: tuple[str, ...] | None = None) -> list[dict]:
     sql = """
-    SELECT po.*, p.name AS product_name, p.category, s.name AS supplier_name
+    SELECT po.*, p.name AS product_name, p.category, p.upc AS product_upc,
+           s.name AS supplier_name
     FROM purchase_orders po
     JOIN products p ON p.product_id = po.product_id
     JOIN suppliers s ON s.supplier_id = po.supplier_id

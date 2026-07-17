@@ -28,6 +28,7 @@ STORAGE_TURNS_PER_WEEK = 2  # weekly pantry throughput cap = storage * turns
 BOX_LB = 10.0               # lb per food box (stated assumption for metrics)
 HORIZON_DAYS = 7            # planning horizon; arrivals on/after day 7 are unusable
 
+
 OBJECTIVE_WEIGHTS = {"alpha_unmet": 1.0, "beta_equity": 2000.0,
                      "gamma_cost": 0.05, "delta_spoilage": 0.3,
                      # anti-degeneracy tie-break on inter-warehouse transfers
@@ -38,6 +39,8 @@ OBJECTIVE_WEIGHTS = {"alpha_unmet": 1.0, "beta_equity": 2000.0,
 
 def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", s.lower())).strip()
+
+
 
 
 def _tokens(s: str) -> set[str]:
@@ -147,9 +150,6 @@ def resolve_event(conn: sqlite3.Connection, event_id: str) -> list[dict]:
 
     ext_suppliers = [_norm(s) for s in ext.supplier_names]
     ext_facilities = [_norm(f) for f in ext.facility_names]
-    regions = {r.strip().lower() for r in ext.distribution_regions}
-    region_states = {"california": "CA", "nevada": "NV"}
-    region_abbrevs = {region_states[r] for r in regions if r in region_states}
 
     aliases: dict[str, list[str]] = {}
     for a in rows(conn, "SELECT supplier_id, alias FROM supplier_aliases"):
@@ -178,65 +178,217 @@ def resolve_event(conn: sqlite3.Connection, event_id: str) -> list[dict]:
                 return "fuzzy", s["name"]
         return None, ""
 
-    def date_overlap(d: date) -> bool:
+    def date_applicability(
+        d: date,
+        kind: str,
+        *,
+        bounded: bool = False,
+    ) -> str:
+        """Return overlap, conflict, or unknown for one operational date."""
         if not (ext.production_date_start and ext.production_date_end):
-            return True  # cannot exclude on dates the notice does not state
-        return ext.production_date_start <= d <= ext.production_date_end + timedelta(days=TRANSIT_DAYS)
+            return "unknown"
+        if kind == "po" and not bounded:
+            return "overlap" if d >= ext.production_date_start else "conflict"
+        if ext.production_date_start <= d <= (
+            ext.production_date_end + timedelta(days=TRANSIT_DAYS)
+        ):
+            return "overlap"
+        return "conflict"
 
     def classify(target: dict, kind: str) -> tuple[str, int, float, MatchEvidence] | None:
         prod_hit = _product_match(ext.products, target["product_name"])
         reasons: list[str] = []
         fields: dict[str, str] = {}
+        when = _parse_date(
+            target["received_at"] if kind == "lot" else target["expected_delivery"]
+        )
+        date_status = date_applicability(when, kind)
+        upc_date_status = date_applicability(when, kind, bounded=True)
+        date_label = "receipt" if kind == "lot" else "expected delivery"
 
-        # Tier 1: authoritative identifier
-        if kind == "lot" and target["supplier_lot_code"] and target["supplier_lot_code"] in ext.lot_codes:
-            reasons.append(f"lot code {target['supplier_lot_code']} listed in the notice")
-            fields["lot_code"] = target["supplier_lot_code"]
-            ev_ = MatchEvidence(tier=1, reasons=reasons, matched_fields=fields,
-                                notice_excerpts={"lot_codes": ext.excerpts.get("lot_codes", "")})
+        # Tier 1: authoritative lot identifier, or UPC with applicable dates.
+        if (
+            kind == "lot"
+            and target["supplier_lot_code"]
+            and target["supplier_lot_code"] in ext.lot_codes
+        ):
+            lot_code = target["supplier_lot_code"]
+            ev_ = MatchEvidence(
+                tier=1,
+                reasons=[f"lot code {lot_code} listed in the notice"],
+                matched_fields={"lot_code": lot_code},
+                notice_excerpts={"lot_codes": ext.excerpts.get("lot_codes", "")},
+            )
             return "confirmed", 1, 1.0, ev_
 
+        product_upc = target.get("product_upc")
+        upc_hit = (
+            next(
+                (
+                    value for value in ext.upcs
+                    if re.sub(r"\D", "", value) == re.sub(r"\D", "", product_upc)
+                ),
+                None,
+            )
+            if product_upc
+            else None
+        )
+        if upc_hit and upc_date_status != "conflict":
+            reasons = [f"product UPC {upc_hit} listed in the notice"]
+            excerpts = {
+                "upcs": ext.excerpts.get("upcs", ""),
+                "production_date_start": ext.excerpts.get("production_date_start", ""),
+                "production_date_end": ext.excerpts.get("production_date_end", ""),
+            }
+            if upc_date_status == "overlap":
+                reasons.append(
+                    f"{date_label} falls within the stated production/transit window"
+                )
+                ev_ = MatchEvidence(
+                    tier=1,
+                    reasons=reasons,
+                    matched_fields={"upc": product_upc},
+                    notice_excerpts=excerpts,
+                )
+                return "confirmed", 1, 1.0, ev_
+            reasons.append(
+                "date applicability unresolved; the notice does not state a "
+                "complete production window"
+            )
+            ev_ = MatchEvidence(
+                tier=1,
+                reasons=reasons,
+                matched_fields={"upc": product_upc},
+                notice_excerpts=excerpts,
+            )
+            return "unknown", 1, 0.7, ev_
+
         sup_level, sup_detail = supplier_evidence(target["supplier_id"])
-        when = _parse_date(target["received_at"] if kind == "lot" else target["expected_delivery"])
-        dates_ok = date_overlap(when) if kind == "lot" else when >= (ext.production_date_start or when)
 
-        # Tier 2: exact supplier + product + dates
-        if sup_level == "exact" and prod_hit and dates_ok:
-            reasons += [f"supplier '{sup_detail}' named in the notice",
-                        f"product matches '{prod_hit}'",
-                        "date window overlaps the stated production window"
-                        if kind == "lot" else "delivery expected after the production window began"]
+        # Tier 2: exact supplier + product + applicable dates.
+        if sup_level == "exact" and prod_hit:
+            reasons = [
+                f"supplier '{sup_detail}' named in the notice",
+                f"product matches '{prod_hit}'",
+            ]
             fields.update({"supplier": sup_detail, "product": prod_hit})
-            ev_ = MatchEvidence(tier=2, reasons=reasons, matched_fields=fields,
-                                notice_excerpts={k: ext.excerpts.get(k, "") for k in
-                                                 ("supplier_names", "products", "production_date_start")})
-            return "probable", 2, 0.8, ev_
+            excerpts = {
+                key: ext.excerpts.get(key, "")
+                for key in (
+                    "supplier_names",
+                    "products",
+                    "production_date_start",
+                    "production_date_end",
+                )
+            }
+            if date_status == "overlap":
+                reasons.append(
+                    f"{date_label} falls within the stated production/transit window"
+                )
+                ev_ = MatchEvidence(
+                    tier=2,
+                    reasons=reasons,
+                    matched_fields=fields,
+                    notice_excerpts=excerpts,
+                )
+                return "probable", 2, 0.8, ev_
+            if date_status == "unknown":
+                reasons.append(
+                    "date applicability unresolved; the notice does not state a "
+                    "complete production window"
+                )
+                ev_ = MatchEvidence(
+                    tier=2,
+                    reasons=reasons,
+                    matched_fields=fields,
+                    notice_excerpts=excerpts,
+                )
+                return "unknown", 2, 0.6, ev_
 
-        # Tier 3: alias/facility + product + dates
-        fac_hit = kind == "lot" and target.get("facility_id") and any(
-            _norm(f["name"]) in ext_facilities
-            for f in rows(conn, "SELECT name FROM facilities WHERE facility_id=?", (target["facility_id"],)))
-        if (sup_level == "alias" or fac_hit) and prod_hit and dates_ok:
-            reasons += [f"supplier alias/facility evidence ('{sup_detail or 'facility'}')",
-                        f"product matches '{prod_hit}'", "date window overlaps"]
-            ev_ = MatchEvidence(tier=3, reasons=reasons, matched_fields=fields,
-                                notice_excerpts={"facility_names": ext.excerpts.get("facility_names", "")})
-            return "probable", 3, 0.75, ev_
+        # Tier 3: supplier alias or exact facility name + product + applicable dates.
+        facility_detail: str | None = None
+        if kind == "lot" and target.get("facility_id"):
+            facility_rows = rows(
+                conn,
+                "SELECT name FROM facilities WHERE facility_id=?",
+                (target["facility_id"],),
+            )
+            if (
+                facility_rows
+                and _norm(facility_rows[0]["name"]) in ext_facilities
+            ):
+                facility_detail = facility_rows[0]["name"]
+        if (sup_level == "alias" or facility_detail) and prod_hit:
+            lineage_detail = (
+                f"supplier alias '{sup_detail}'"
+                if sup_level == "alias"
+                else f"facility '{facility_detail}'"
+            )
+            reasons = [f"{lineage_detail} matches the notice", f"product matches '{prod_hit}'"]
+            fields = {"product": prod_hit}
+            fields["supplier_alias" if sup_level == "alias" else "facility"] = (
+                sup_detail if sup_level == "alias" else facility_detail or ""
+            )
+            excerpts = {
+                key: ext.excerpts.get(key, "")
+                for key in (
+                    "supplier_names",
+                    "facility_names",
+                    "products",
+                    "production_date_start",
+                    "production_date_end",
+                )
+            }
+            if date_status == "overlap":
+                reasons.append(
+                    f"{date_label} falls within the stated production/transit window"
+                )
+                ev_ = MatchEvidence(
+                    tier=3,
+                    reasons=reasons,
+                    matched_fields=fields,
+                    notice_excerpts=excerpts,
+                )
+                return "probable", 3, 0.75, ev_
+            if date_status == "unknown":
+                reasons.append(
+                    "date applicability unresolved; the notice does not state a "
+                    "complete production window"
+                )
+                ev_ = MatchEvidence(
+                    tier=3,
+                    reasons=reasons,
+                    matched_fields=fields,
+                    notice_excerpts=excerpts,
+                )
+                return "unknown", 3, 0.55, ev_
 
-        # Tier 4: fuzzy supplier, or product + distribution-region overlap
-        if sup_level == "fuzzy" and prod_hit:
-            reasons += [f"supplier name similar to a recalled supplier ({sup_detail})",
-                        f"product matches '{prod_hit}'"]
-            ev_ = MatchEvidence(tier=4, reasons=reasons, matched_fields=fields, notice_excerpts={})
+        # Tier 4: fuzzy supplier plus product evidence.
+        if sup_level == "fuzzy" and prod_hit and date_status != "conflict":
+            reasons = [
+                f"supplier name similar to a recalled supplier ({sup_detail})",
+                f"product matches '{prod_hit}'",
+            ]
+            if date_status == "overlap":
+                reasons.append(
+                    f"{date_label} falls within the stated production/transit window"
+                )
+            else:
+                reasons.append(
+                    "date applicability unresolved; the notice does not state a "
+                    "complete production window"
+                )
+            fields = {"supplier": sup_detail, "product": prod_hit}
+            ev_ = MatchEvidence(
+                tier=4,
+                reasons=reasons,
+                matched_fields=fields,
+                notice_excerpts={
+                    "supplier_names": ext.excerpts.get("supplier_names", ""),
+                    "products": ext.excerpts.get("products", ""),
+                },
+            )
             return "possible", 4, 0.5, ev_
-        sup_state = suppliers[target["supplier_id"]]["state"]
-        if prod_hit and sup_state in region_abbrevs:
-            reasons += [f"product matches '{prod_hit}'",
-                        f"supplier is in a stated distribution region ({sup_state})",
-                        "no supplier or lot lineage connects this record"]
-            ev_ = MatchEvidence(tier=4, reasons=reasons, matched_fields={"product": prod_hit},
-                                notice_excerpts={"distribution_regions": ext.excerpts.get("distribution_regions", "")})
-            return "possible", 4, 0.45, ev_
 
         if target["category"] in implicated_categories:
             ev_ = MatchEvidence(tier=0, reasons=["no identifier, supplier, product, or date lineage connects this record"],

@@ -165,7 +165,7 @@ def test_approval_re_evaluates_and_blocks_tampered_latest_plan():
 @pytest.mark.parametrize(
     ("incident_key", "category", "dos_before", "dos_after"),
     [
-        ("onion_ecoli", "produce", 4.8, None),
+        ("onion_ecoli", "produce", 5.8, None),
         ("chicken_salmonella", "protein", 0.0, 0.0),
         ("pasta_allergen", "grain", None, None),
     ],
@@ -373,3 +373,53 @@ def test_provided_api_extraction_with_zero_exposure_never_creates_action_plan():
         "SELECT detail_json FROM audit_log WHERE action='plan_approval_blocked'",
     )
     assert json.loads(blocked[-1]["detail_json"])["reason"] == "no_exposure"
+
+
+def test_api_extraction_records_only_contributing_cached_enrichment(monkeypatch):
+    conn = _conn()
+    generate(conn)
+    raw_text = (
+        "OFFICIAL SOURCE: openFDA Food Enforcement API\n"
+        "Product: Moringa capsules\n"
+        "Recalling firm: MOGO Moringa LLC\n"
+        "Facility: Plant 7\n"
+    )
+    base = RecallExtraction(
+        authority="FDA",
+        products=["Moringa capsules"],
+        supplier_names=["MOGO Moringa LLC"],
+        excerpts={
+            "products": "Moringa capsules",
+            "supplier_names": "MOGO Moringa LLC",
+        },
+        confidence=0.99,
+    )
+    enriched = base.model_copy(update={
+        "facility_names": ["Plant 7"],
+        "excerpts": {
+            **base.excerpts,
+            "facility_names": "Plant 7",
+        },
+    })
+    monkeypatch.setattr(
+        "foodshock.agent.enrich_source_extraction",
+        lambda *_args, **_kwargs: (enriched, "cached-llm", []),
+    )
+
+    result = RecallResponseAgent(conn, allow_llm=True).run(
+        raw_text,
+        event_id="FDA-LIVE-ENRICHED",
+        source_url="https://api.fda.gov/food/enforcement.json",
+        published_at="2026-07-08",
+        provided_extraction=base,
+        provided_extraction_method="openfda-api",
+    )
+
+    assert result.extraction.facility_names == ["Plant 7"]
+    assert result.extraction_method == "openfda-api+cached-llm"
+    assert result.has_exposure is False
+    assert rows(
+        conn,
+        "SELECT extraction_method FROM recall_events "
+        "WHERE event_id='FDA-LIVE-ENRICHED'",
+    )[0]["extraction_method"] == "openfda-api+cached-llm"
